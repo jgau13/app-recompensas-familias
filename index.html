@@ -1399,15 +1399,30 @@
                 if(localUserMode === 'admin') renderPendingTasksList();
             }, (error) => console.error("Error en listener de childPendingTasksRef:", error));
 
+            // *** SECCIÓN MODIFICADA ***
             // Listener para Historial de Puntos del hijo (filtradas)
-            const historyQuery = query(pointsHistoryRef, where("childId", "==", currentChildId), orderBy("timestamp", "desc"), limit(20));
+            // Quitamos orderBy y limit para evitar errores de índice y lo hacemos en JS
+            const historyQuery = query(pointsHistoryRef, where("childId", "==", currentChildId));
             pointsHistoryListener = onSnapshot(historyQuery, (s) => {
-                localPointsHistory = s.docs.map(d => d.data());
+                
+                let historyData = s.docs.map(d => d.data());
+                
+                // Ordenamos en JavaScript (descendente)
+                historyData.sort((a, b) => {
+                    const timeA = a.timestamp ? a.timestamp.toMillis() : 0;
+                    const timeB = b.timestamp ? b.timestamp.toMillis() : 0;
+                    return timeB - timeA;
+                });
+
+                // Limitamos en JavaScript
+                localPointsHistory = historyData.slice(0, 20); // Tomamos solo los primeros 20
+
                 renderPointsHistory();
+
             }, (error) => {
                 console.error("Error en listener de pointsHistoryRef:", error);
-                // Si da error de índice, puedes quitar el orderBy y ordenar en cliente
             });
+            // *** FIN DE SECCIÓN MODIFICADA ***
 
             // *** NUEVO LISTENER: Tareas en Cooldown (completadas hoy) ***
             const todayStr = getLocalDateString();
