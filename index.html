@@ -153,7 +153,7 @@
                 'btn-penalties': document.getElementById('btn-penalties'),
                 'btn-manage-children': document.getElementById('btn-manage-children'),
                 'btn-manage-tasks': document.getElementById('btn-manage-tasks'),
-                'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'), // <-- Botón de candado añadido
+                'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'), // <-- Botón de candado
                 back: document.querySelectorAll('.btn-back')
             };
 
@@ -438,17 +438,14 @@
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.remove('hidden'));
                 buttons['btn-logout'].classList.add('hidden'); // Ocultar logout en modo hijo
-                buttons['btn-exit-child-mode'].classList.remove('hidden'); // <-- Mostrar candado
             } else if (mode === 'admin') {
                 adminElements.forEach(el => el.classList.remove('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
                 buttons['btn-logout'].classList.remove('hidden'); // Mostrar logout en modo admin
-                buttons['btn-exit-child-mode'].classList.add('hidden'); // <-- Ocultar candado
             } else {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
                 buttons['btn-logout'].classList.add('hidden');
-                buttons['btn-exit-child-mode'].classList.add('hidden'); // <-- Ocultar candado
             }
         }
 
@@ -1019,6 +1016,9 @@
             const name = e.target['task-name'].value;
             const points = parseInt(e.target['task-points'].value, 10);
             if (!name || points <= 0) return;
+            
+            console.log('handleAddTask: Guardando tarea para childId:', currentChildId, { name, points }); // <-- LOG AÑADIDO
+
             showLoading(true);
             try { 
                 // *** 1ª CORRECCIÓN APLICADA AQUÍ ***
@@ -1027,9 +1027,10 @@
                     points, 
                     childId: currentChildId 
                 }); 
+                console.log('handleAddTask: Tarea guardada con éxito.'); // <-- LOG AÑADIDO
                 e.target.reset(); 
             } 
-            catch (err) { console.error(err); } 
+            catch (err) { console.error("Error al guardar tarea:", err); } // <-- Error log
             finally { showLoading(false); }
         }
         async function handleEditTaskSubmit(e) {
@@ -1310,15 +1311,21 @@
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
             
-            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef) return;
+            console.log('setupChildFirestoreListeners: Configurando listeners para childId:', currentChildId); // <-- LOG AÑADIDO
+
+            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef) {
+                console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS, no se configuran listeners.', { currentChildId, tasksRef, pendingTasksRef, pointsHistoryRef });
+                return;
+            }
 
             // Listener para Tareas del hijo (filtradas)
             const tasksQuery = query(tasksRef, where("childId", "==", currentChildId));
             tasksListener = onSnapshot(tasksQuery, (s) => {
+                console.log('tasksListener: Tareas recibidas:', s.docs.length); // <-- LOG AÑADIDO
                 localTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderTasksList();
                 if(localUserMode === 'admin') renderActiveTasksEditList();
-            }, (error) => console.error("Error en listener de childTasksRef:", error));
+            }, (error) => console.error("Error GRAVE en tasksListener:", error)); // <-- ERROR AÑADIDO
 
             // Listener para Pendientes del hijo (filtradas)
             const pendingQuery = query(pendingTasksRef, where("childId", "==", currentChildId));
