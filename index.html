@@ -36,7 +36,8 @@
             writeBatch,
             serverTimestamp,
             orderBy,
-            limit
+            limit,
+            increment // <-- *** IMPORTACIÓN AÑADIDA ***
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuración de Firebase ---
@@ -1164,13 +1165,12 @@
             if (!currentChildId || !pendingTasksRef) return;
             showLoading(true);
             try { 
-                // *** 2ª CORRECCIÓN APLICADA AQUÍ ***
                 await addDoc(pendingTasksRef, { 
                     taskId, // <-- TaskID es crucial
                     name, 
                     points, 
                     requestedAt: serverTimestamp(),
-                    childId: currentChildId // Añadido
+                    childId: currentChildId 
                 }); 
             } 
             catch (err) { console.error(err); } 
@@ -1181,11 +1181,10 @@
             if (!currentChildId || !pendingTasksRef || !childrenRef || !tasksCooldownRef) return;
             showLoading(true);
             try {
-                const newTotal = (localTotalPoints || 0) + points;
+                // const newTotal = (localTotalPoints || 0) + points; // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
-                // *** LÓGICA DE COOLDOWN ***
-                const pendingTask = localPendingTasks.find(pt => pt.id === id); // Busca la tarea pendiente
+                const pendingTask = localPendingTasks.find(pt => pt.id === id); 
                 if (!pendingTask) {
                     console.error("No se encontró la tarea pendiente para aprobar:", id);
                     showLoading(false);
@@ -1193,17 +1192,16 @@
                 }
                 
                 const batch = writeBatch(db);
-                batch.update(childDocRef, { totalPoints: newTotal });
-                batch.delete(doc(db, pendingTasksRef.path, id)); // Borra de pendientes
+                // *** CAMBIO CRÍTICO: Usar increment() ***
+                batch.update(childDocRef, { totalPoints: increment(points) }); 
+                batch.delete(doc(db, pendingTasksRef.path, id)); 
                 
-                // Añade la tarea al "cooldown" de hoy
-                const cooldownDocRef = doc(tasksCooldownRef); // Crea un ID aleatorio
+                const cooldownDocRef = doc(tasksCooldownRef); 
                 batch.set(cooldownDocRef, {
                     childId: currentChildId,
-                    taskId: pendingTask.taskId, // Usa el ID de la tarea original
-                    date: getLocalDateString() // Sello de hoy (local)
+                    taskId: pendingTask.taskId, 
+                    date: getLocalDateString() 
                 });
-                // *** FIN DE LÓGICA DE COOLDOWN ***
 
                 await batch.commit();
 
@@ -1226,12 +1224,13 @@
             if (localTotalPoints < cost || !currentChildId || !childrenRef || !redeemedRewardsRef) return;
             showLoading(true);
             try {
-                const newTotal = localTotalPoints - cost;
+                // const newTotal = localTotalPoints - cost; // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
                 const batch = writeBatch(db);
-                batch.update(childDocRef, { totalPoints: newTotal });
-                // Añadir a canjeados (global)
+                // *** CAMBIO CRÍTICO: Usar increment() ***
+                batch.update(childDocRef, { totalPoints: increment(-cost) }); 
+                
                 const newRef = doc(collection(db, redeemedRewardsRef.path));
                 batch.set(newRef, { childId: currentChildId, childName: currentChildName, name, cost, redeemedAt: serverTimestamp() });
                 await batch.commit();
@@ -1247,12 +1246,15 @@
             if (!currentChildId || !childrenRef) return;
             showLoading(true);
             try {
-                const newTotal = (localTotalPoints || 0) - Math.abs(points);
+                // const newTotal = (localTotalPoints || 0) - Math.abs(points); // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
-                await updateDoc(childDocRef, { totalPoints: newTotal });
+                
+                // *** CAMBIO CRÍTICO: Usar increment() ***
+                const pointsToDecrement = -Math.abs(points);
+                await updateDoc(childDocRef, { totalPoints: increment(pointsToDecrement) }); 
                 
                 // Añadir al historial
-                await addPointsHistory(currentChildId, currentChildName, `Penalidad: ${name}`, -points);
+                await addPointsHistory(currentChildId, currentChildName, `Penalidad: ${name}`, pointsToDecrement);
 
             } catch (err) {
                 console.error(err);
@@ -1544,7 +1546,7 @@
                     <span class="text-lg text-center">Puntos</span>
                 </button>
                 <button id="btn-redeem" class="main-menu-button bg-purple-500 child-only">
-                    <img src="https://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
+                    <img src="https-://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
                     <span class="text-lg text-center">Canjear Puntos</span>
                 </button>
                 <button id="btn-redeemed-list" class="main-menu-button bg-pink-500 child-only">
