@@ -8,15 +8,15 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carga de Firebase -->
     <script type="module">
-        // Importaciones de Firebase (Auth y Firestore)
+        // Importaciones de Firebase
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { 
             getAuth, 
             onAuthStateChanged,
-            createUserWithEmailAndPassword,
-            signInWithEmailAndPassword,
-            signInWithPopup,
             GoogleAuthProvider,
+            signInWithPopup,
+            signInWithEmailAndPassword,
+            createUserWithEmailAndPassword,
             signOut
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
@@ -40,33 +40,33 @@
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuración de Firebase ---
-        // ¡¡IMPORTANTE!! DEBES PONER AQUÍ LAS LLAVES DE TU *NUEVO* PROYECTO DE FIREBASE
-        const firebaseConfig = {
-  apiKey: "AIzaSyDBzsAiJQ6ktFWUxYSpWDXsWdBwMoW3bNo",
-  authDomain: "app-recompensas-familias.firebaseapp.com",
-  projectId: "app-recompensas-familias",
-  storageBucket: "app-recompensas-familias.firebasestorage.app",
-  messagingSenderId: "680945319622",
-  appId: "1:680945319622:web:782abbf670e7899b1961c7",
-  measurementId: "G-EPPYQC4FGQ"
-};
+        // ¡¡IMPORTANTE!! DEBES REEMPLAZAR ESTO CON TUS PROPIAS LLAVES
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : { 
+                apiKey: "TU_NUEVA_API_KEY",   
+                authDomain: "TU_NUEVO_AUTH_DOMAIN",   
+                projectId: "TU_NUEVO_PROJECT_ID",   
+                // ...etc
+              };
         
-        // --- CÓDIGO PIN (para cambiar de modo hijo a admin) ---
-        const ADMIN_PIN = '0000'; 
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'multi-family-reward-app';
+        
+        // --- CÓDIGO PIN (Admin) ---
+        const ADMIN_PIN = '0000'; // PIN para salir del modo hijo
 
         // --- Inicialización ---
-        let app, db, auth, googleProvider;
-        let currentUserId = null; // UID del papá/mamá logueado
+        let app, db, auth, provider;
+        let currentUserId = null; // ID del Papá/Mamá (Admin)
         
-        // --- Referencias Dinámicas ---
-        let dataDocRef; // Documento 'data' que contiene las colecciones
-        let globalProfileRef, globalRewardsRef, globalPenaltiesRef, childrenRef, globalRedeemedRef, globalPointsHistoryRef;
-        let childTasksRef, childPendingTasksRef; 
+        // --- Referencias Dinámicas (por familia) ---
+        let familyDocRef; // Documento de la familia (para 'lastReset')
+        let childrenRef, tasksRef, pendingTasksRef, rewardsRef, penaltiesRef, pointsHistoryRef, redeemedRewardsRef;
 
         // --- Estado Local ---
         let localUserMode = 'unknown'; // 'unknown', 'child', 'admin'
         let currentChildId = null; // ID del hijo seleccionado
-        let currentChildName = ""; 
+        let currentChildName = ""; // Nombre del hijo
         
         let localChildren = [];
         let localTasks = [];
@@ -74,23 +74,14 @@
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
-        let localTotalPoints = 0;
-        let localLastReset = null;
+        let localTotalPoints = 0; // Puntos del hijo seleccionado
+        let localLastReset = null; // Reseteo de la familia
 
         let currentEditingTaskId = null;
         let currentEditingPenaltyId = null;
         let currentEditingRewardId = null; 
         let currentEditingChildId = null; 
         let hasInitialDataLoaded = false; 
-        
-        // --- Listeners de DB (para poder limpiarlos) ---
-        let childrenListener = null;
-        let globalRewardsListener = null;
-        let globalPenaltiesListener = null;
-        let globalProfileListener = null;
-        let tasksListener = null;
-        let pendingTasksListener = null;
-        let historyListener = null;
 
         // --- Elementos del DOM ---
         let pages = {};
@@ -100,30 +91,39 @@
         let elements = {};
         let selects = {};
 
+        // --- Listeners (para limpiar) ---
+        let childrenListener = null;
+        let tasksListener = null;
+        let pendingTasksListener = null;
+        let rewardsListener = null;
+        let penaltiesListener = null;
+        let pointsHistoryListener = null;
+        let redeemedRewardsListener = null;
+        let familyDocListener = null;
+
         document.addEventListener('DOMContentLoaded', async () => {
             cacheDOMElements();
             setupUIListeners();
-            showPage('page-loading'); // Empezar en loading
+            showLoading(true);
 
             try {
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                googleProvider = new GoogleAuthProvider();
+                provider = new GoogleAuthProvider();
 
-                setupAuthListener(); // El listener decide qué página mostrar
+                setupAuthListener(); // Esto decidirá si mostrar Login o App
 
             } catch (error) {
                 console.error("Error crítico en la inicialización:", error);
                 showPage('page-login'); 
-                elements.loginError.textContent = "Error al conectar con Firebase.";
-                elements.loginError.classList.remove('hidden');
+            } finally {
+                showLoading(false);
             }
         });
 
         function cacheDOMElements() {
             pages = {
-                'page-loading': document.getElementById('page-loading'),
                 'page-login': document.getElementById('page-login'),
                 'page-pin-modal': document.getElementById('page-pin-modal'),
                 'page-main': document.getElementById('page-main'),
@@ -141,11 +141,9 @@
                 'btn-login-google': document.getElementById('btn-login-google'),
                 'btn-show-email-login': document.getElementById('btn-show-email-login'),
                 'btn-show-email-register': document.getElementById('btn-show-email-register'),
+                'btn-logout': document.getElementById('btn-logout'),
+                'btn-pin-validate': document.getElementById('btn-pin-validate'),
                 'btn-pin-cancel': document.getElementById('btn-pin-cancel'),
-                'btn-pin-submit': document.getElementById('btn-pin-submit'),
-                'btn-admin-logout': document.getElementById('btn-admin-logout'),
-                'btn-child-logout': document.getElementById('btn-child-logout'),
-                
                 'btn-tasks': document.getElementById('btn-tasks'),
                 'btn-points': document.getElementById('btn-points'),
                 'btn-evaluate': document.getElementById('btn-evaluate'),
@@ -188,14 +186,9 @@
             elements = {
                 loginError: document.getElementById('login-error'),
                 registerError: document.getElementById('register-error'),
-                emailRegisterForm: document.getElementById('email-register-form'),
-                emailLoginForm: document.getElementById('email-login-form'),
-                
                 totalPointsDisplay: document.getElementById('total-points-display'),
                 totalPointsHeader: document.getElementById('total-points-header'),
                 childNameHeader: document.getElementById('child-name-header'),
-                adminNameHeader: document.getElementById('admin-name-header'),
-                
                 loading: document.getElementById('loading-overlay'),
                 pinInput: document.getElementById('pin-input'),
                 pinError: document.getElementById('pin-error'),
@@ -224,59 +217,16 @@
             };
         }
 
-        // --- LÓGICA DE AUTENTICACIÓN ---
-
-        // Listener principal de Auth. Decide si mostrar login o la app.
-        function setupAuthListener() {
-            onAuthStateChanged(auth, (user) => {
-                if (user) {
-                    // Hay un papá/mamá logueado
-                    currentUserId = user.uid;
-                    setupGlobalFirestoreReferences(currentUserId); 
-                    setupGlobalFirestoreListeners();
-                    
-                    // Revisa si está en modo hijo o admin
-                    checkCachedMode(user);
-                } else {
-                    // Nadie logueado
-                    currentUserId = null;
-                    clearAllListeners(); // Limpia listeners de DB
-                    showPage('page-login');
-                }
-                showLoading(false);
-            });
-        }
-
         function setupUIListeners() {
-            // Login
+            // Login / Register
             buttons['btn-login-google'].addEventListener('click', handleGoogleLogin);
-            buttons['btn-show-email-login'].addEventListener('click', () => {
-                elements.emailLoginForm.classList.toggle('hidden');
-                elements.emailRegisterForm.classList.add('hidden');
-            });
-            buttons['btn-show-email-register'].addEventListener('click', () => {
-                elements.emailRegisterForm.classList.toggle('hidden');
-                elements.emailLoginForm.classList.add('hidden');
-            });
+            buttons['btn-show-email-login'].addEventListener('click', () => showLoginForm('login'));
+            buttons['btn-show-email-register'].addEventListener('click', () => showLoginForm('register'));
             forms['form-email-login'].addEventListener('submit', handleEmailLogin);
             forms['form-email-register'].addEventListener('submit', handleEmailRegister);
             
-            // PIN (para salir de modo hijo)
-            forms['form-pin'].addEventListener('submit', handlePinSubmit);
-            buttons['btn-pin-cancel'].addEventListener('click', () => {
-                elements.pinInput.value = '';
-                elements.pinError.classList.add('hidden');
-                showPage('page-main'); // Regresa a la página principal (modo hijo)
-            });
-            
-            // Logout
-            buttons['btn-admin-logout'].addEventListener('click', handleLogout);
-            buttons['btn-child-logout'].addEventListener('click', () => {
-                // Esto no desloguea, solo pide PIN para volver a modo admin
-                showPage('page-pin-modal');
-            });
-            
             // Navegación principal
+            buttons['btn-logout'].addEventListener('click', logout);
             buttons['btn-tasks'].addEventListener('click', () => showPage('page-tasks'));
             buttons['btn-points'].addEventListener('click', () => showPage('page-points'));
             buttons['btn-evaluate'].addEventListener('click', () => showPage('page-evaluate'));
@@ -288,6 +238,10 @@
             
             buttons.back.forEach(btn => {
                 btn.addEventListener('click', () => {
+                    // Si salimos de una página de hijo, volvemos a la selección de hijo
+                    if (localUserMode === 'child') {
+                        setAdminMode(currentUserId); // Vuelve al panel de admin
+                    }
                     // Limpia los selects de admin al volver al menú
                     if (localUserMode === 'admin') {
                         clearAdminSelects();
@@ -295,6 +249,11 @@
                     showPage('page-main');
                 });
             });
+
+            // PIN Modal
+            forms['form-pin'].addEventListener('submit', handlePinValidate);
+            buttons['btn-pin-cancel'].addEventListener('click', () => showPage('page-main'));
+
 
             // Forms Admin - Gestión de Hijos
             forms['form-add-child'].addEventListener('submit', handleAddChild);
@@ -306,7 +265,7 @@
             forms['form-edit-task'].addEventListener('submit', handleEditTaskSubmit);
             elements.editTaskCancel.addEventListener('click', cancelEditTask);
 
-            // Forms Admin - Gestión Global (para esta familia)
+            // Forms Admin - Gestión Global
             forms['form-add-reward'].addEventListener('submit', handleAddReward);
             forms['form-edit-reward'].addEventListener('submit', handleEditRewardSubmit); 
             elements.editRewardCancel.addEventListener('click', cancelEditReward); 
@@ -320,124 +279,112 @@
             selects['child-select-tasks'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'tasks'));
         }
 
-        async function handleGoogleLogin() {
-            showLoading(true);
-            try {
-                await signInWithPopup(auth, googleProvider);
-                // El auth listener se encargará de redirigir
-            } catch (error) {
-                console.error("Error con Google:", error);
-                elements.loginError.textContent = `Error: ${error.message}`;
-                elements.loginError.classList.remove('hidden');
-                showLoading(false);
-            }
+        // --- Lógica de Autenticación ---
+
+        function setupAuthListener() {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    // Usuario está logueado (Admin)
+                    currentUserId = user.uid;
+                    setAdminMode(user.uid);
+                } else {
+                    // Usuario no está logueado
+                    currentUserId = null;
+                    clearAllListeners();
+                    showPage('page-login');
+                    showLoading(false);
+                }
+            });
         }
         
-        async function handleEmailLogin(e) {
-            e.preventDefault();
+        async function handleGoogleLogin() {
             showLoading(true);
-            const email = e.target.email.value;
-            const password = e.target.password.value;
+            clearLoginErrors();
             try {
-                await signInWithEmailAndPassword(auth, email, password);
+                await signInWithPopup(auth, provider);
+                // El auth listener (setupAuthListener) se encargará del resto
             } catch (error) {
-                console.error("Error de login:", error);
+                console.error("Error en login con Google:", error);
                 elements.loginError.textContent = `Error: ${error.message}`;
                 elements.loginError.classList.remove('hidden');
                 showLoading(false);
             }
         }
 
+        async function handleEmailLogin(e) {
+            e.preventDefault();
+            showLoading(true);
+            clearLoginErrors();
+            const email = e.target.email.value;
+            const password = e.target.password.value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                // El auth listener se encargará
+            } catch (error) {
+                console.error("Error en login con Email:", error);
+                elements.loginError.textContent = `Error: ${error.message}`;
+                elements.loginError.classList.remove('hidden');
+                showLoading(false);
+            }
+        }
+        
         async function handleEmailRegister(e) {
             e.preventDefault();
             showLoading(true);
+            clearLoginErrors();
             const email = e.target.email.value;
             const password = e.target.password.value;
             try {
                 await createUserWithEmailAndPassword(auth, email, password);
+                // El auth listener se encargará
             } catch (error) {
-                console.error("Error de registro:", error);
+                console.error("Error en registro con Email:", error);
                 elements.registerError.textContent = `Error: ${error.message}`;
                 elements.registerError.classList.remove('hidden');
                 showLoading(false);
             }
         }
-        
-        async function handleLogout() {
+
+        async function logout() {
             showLoading(true);
-            localStorage.removeItem('appMode');
-            localStorage.removeItem('currentChildId');
-            clearChildContext();
+            clearAllData(); // Limpia estado local
             await signOut(auth);
-            // El auth listener se encargará de mostrar el login
+            // El auth listener se encargará de mostrar la página de login
         }
 
-        // --- DEFINICIÓN DE RUTAS DE FIREBASE ---
-
-        function setupGlobalFirestoreReferences(uid) {
-            if (!uid) return;
-            // Ruta privada para la familia logueada
-            const familyDataPath = `/familias/${uid}`;
-            
-            dataDocRef = doc(db, familyDataPath, 'data');
-            
-            globalProfileRef = dataDocRef; 
-            
-            childrenRef = collection(db, dataDocRef.path, 'children');
-            globalRewardsRef = collection(db, dataDocRef.path, 'rewards');
-            globalPenaltiesRef = collection(db, dataDocRef.path, 'penalties');
-            globalRedeemedRef = collection(db, dataDocRef.path, 'redeemedRewards');
-            globalPointsHistoryRef = collection(db, dataDocRef.path, 'pointsHistory');
-        }
-
-        function setupChildFirestoreReferences(childId) {
-            if (!childId || !childrenRef) {
-                childTasksRef = null;
-                childPendingTasksRef = null;
-                return;
-            }
-            const childDocPath = doc(db, childrenRef.path, childId);
-            childTasksRef = collection(childDocPath, 'tasks');
-            childPendingTasksRef = collection(childDocPath, 'pendingTasks');
-        }
-        
-        function clearAllListeners() {
-            if(globalProfileListener) globalProfileListener();
-            if(childrenListener) childrenListener();
-            if(globalRewardsListener) globalRewardsListener();
-            if(globalPenaltiesListener) globalPenaltiesListener();
-            clearChildContext(); // Limpia los listeners de hijo
-        }
-
-        // --- Lógica de Modo/Login ---
-        
-        function checkCachedMode(user) {
-            const mode = localStorage.getItem('appMode');
-            const childId = localStorage.getItem('currentChildId');
-            
-            // Espera a que los hijos se carguen antes de decidir
-            // (El listener de hijos ahora está en setupGlobalFirestoreListeners)
-            if (mode === 'admin') {
-                setAdminMode(user);
-            } else if (mode === 'child' && childId) {
-                // Intenta loguear como hijo, pero necesita la lista de hijos
-                // El listener de 'childrenRef' se encargará de esto
-                // Si el hijo no existe, se deslogueará
+        function showLoginForm(mode) {
+            clearLoginErrors();
+            if (mode === 'login') {
+                forms['form-email-login'].classList.remove('hidden');
+                forms['form-email-register'].classList.add('hidden');
+                buttons['btn-show-email-login'].classList.add('hidden');
+                buttons['btn-show-email-register'].classList.remove('hidden');
             } else {
-                // Por defecto, entra como admin
-                setAdminMode(user);
+                forms['form-email-login'].classList.add('hidden');
+                forms['form-email-register'].classList.remove('hidden');
+                buttons['btn-show-email-login'].classList.remove('hidden');
+                buttons['btn-show-email-register'].classList.add('hidden');
             }
         }
 
-        function setAdminMode(user) {
+        function clearLoginErrors() {
+            elements.loginError.classList.add('hidden');
+            elements.registerError.classList.add('hidden');
+        }
+
+        // --- Lógica de Modo Admin / Hijo ---
+
+        function setAdminMode(adminUserId) {
             localUserMode = 'admin';
-            localStorage.setItem('appMode', 'admin');
-            localStorage.removeItem('currentChildId');
-            clearChildContext();
+            currentUserId = adminUserId; // ID del papá
+            
+            clearChildContext(); // Limpia datos del hijo si los había
+            setupGlobalFirestoreReferences(adminUserId); // Define las rutas de la familia
+            setupGlobalFirestoreListeners(); // Escucha hijos, recompensas, etc.
+
             updateAdminUI('admin');
-            populateAdminSelects();
-            elements.adminNameHeader.textContent = `Admin: ${user.email || 'Cuenta de Google'}`;
             showPage('page-main');
+            showLoading(false);
         }
 
         function setChildMode(childId, childName, points, gender) {
@@ -446,9 +393,8 @@
             currentChildName = childName;
             localTotalPoints = points;
             
-            localStorage.setItem('appMode', 'child');
-            localStorage.setItem('currentChildId', childId);
-            
+            // Las referencias globales (recompensas) ya están activas
+            // Solo necesitamos activar las del hijo
             setupChildFirestoreReferences(childId);
             setupChildFirestoreListeners();
             updateAdminUI('child');
@@ -459,42 +405,13 @@
             showPage('page-main');
         }
 
-        function clearChildContext() {
-            currentChildId = null;
-            currentChildName = "";
-            localTotalPoints = 0;
-            localTasks = [];
-            localPendingTasks = [];
-            localPointsHistory = [];
-            
-            if(tasksListener) tasksListener();
-            if(pendingTasksListener) pendingTasksListener();
-            if(historyListener) historyListener();
-            tasksListener = null;
-            pendingTasksListener = null;
-            historyListener = null;
-
-            renderTasksList();
-            renderPendingTasksList();
-            renderPointsHistory();
-            renderActiveTasksEditList();
-        }
-        
-        function clearAdminSelects() {
-             Object.values(selects).forEach(select => {
-                if (select) select.value = "";
-             });
-             clearChildContext(); 
-        }
-        
-        function handlePinSubmit(e) {
+        function handlePinValidate(e) {
             e.preventDefault();
             const pin = elements.pinInput.value;
-            if (pin === ADMIN_PIN) {
+            if (pin === ADMIN_PIN) { // TODO: Hacer PIN por familia
                 elements.pinInput.value = '';
                 elements.pinError.classList.add('hidden');
-                // Salir de modo hijo y volver a modo admin
-                setAdminMode(auth.currentUser);
+                setAdminMode(currentUserId); // Vuelve al modo admin
             } else {
                 elements.pinError.classList.remove('hidden');
             }
@@ -507,13 +424,101 @@
             if (mode === 'child') {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.remove('hidden'));
+                buttons['btn-logout'].classList.add('hidden'); // Ocultar logout en modo hijo
             } else if (mode === 'admin') {
                 adminElements.forEach(el => el.classList.remove('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
+                buttons['btn-logout'].classList.remove('hidden'); // Mostrar logout en modo admin
             } else {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
+                buttons['btn-logout'].classList.add('hidden');
             }
+        }
+
+        // --- Lógica de Reinicio Diario ---
+        async function checkDailyReset() {
+            if (!familyDocRef) return;
+            const today = new Date().toISOString().split('T')[0];
+            
+            if (localLastReset && localLastReset !== today) {
+                console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
+                showLoading(true);
+                try {
+                    const batch = writeBatch(db);
+                    
+                    // Limpiar TAREAS PENDIENTES de TODOS los hijos de ESTA familia
+                    for (const child of localChildren) {
+                        const childPendingTasksPath = collection(db, childrenRef.path, child.id, 'pendingTasks');
+                        const pendingSnapshot = await getDocs(childPendingTasksPath);
+                        pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
+                    }
+                    
+                    batch.set(familyDocRef, { lastReset: today }, { merge: true });
+                    await batch.commit();
+                    localLastReset = today; 
+                } catch (err) {
+                    console.error("Error durante el reseteo diario:", err);
+                } finally {
+                    showLoading(false);
+                }
+            }
+        }
+
+        // --- Limpieza de Estado ---
+        function clearAllData() {
+            localUserMode = 'unknown';
+            currentUserId = null;
+            currentChildId = null;
+            currentChildName = "";
+            localChildren = [];
+            localTasks = [];
+            localPendingTasks = [];
+            localRewards = [];
+            localPenalties = [];
+            localPointsHistory = [];
+            localTotalPoints = 0;
+            localLastReset = null;
+            hasInitialDataLoaded = false;
+        }
+
+        function clearAllListeners() {
+            if (familyDocListener) familyDocListener();
+            if (childrenListener) childrenListener();
+            if (rewardsListener) rewardsListener();
+            if (penaltiesListener) penaltiesListener();
+            if (redeemedRewardsListener) redeemedRewardsListener();
+            clearChildContext();
+        }
+
+        function clearChildContext() {
+            currentChildId = null;
+            currentChildName = "";
+            localTotalPoints = 0;
+            localTasks = [];
+            localPendingTasks = [];
+            localPointsHistory = [];
+            
+            // Limpia listeners de hijo
+            if(tasksListener) tasksListener();
+            if(pendingTasksListener) pendingTasksListener();
+            if(pointsHistoryListener) pointsHistoryListener();
+            tasksListener = null;
+            pendingTasksListener = null;
+            pointsHistoryListener = null;
+
+            // Limpia las vistas
+            renderTasksList();
+            renderPendingTasksList();
+            renderPointsHistory();
+            renderActiveTasksEditList();
+        }
+        
+        function clearAdminSelects() {
+             Object.values(selects).forEach(select => {
+                if (select) select.value = "";
+             });
+             clearChildContext(); // Limpia los datos del hijo seleccionado
         }
 
         function showPage(pageId) {
@@ -534,36 +539,7 @@
             }
         }
 
-        // --- Lógica de Reinicio Diario ---
-        async function checkDailyReset() {
-            const today = new Date().toISOString().split('T')[0];
-            if (localLastReset && localLastReset !== today) {
-                console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
-                showLoading(true);
-                try {
-                    const batch = writeBatch(db);
-                    
-                    for (const child of localChildren) {
-                        const childPendingTasksPath = collection(db, childrenRef.path, child.id, 'pendingTasks');
-                        const pendingSnapshot = await getDocs(childPendingTasksPath);
-                        pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
-                    }
-                    
-                    batch.set(globalProfileRef, { lastReset: today }, { merge: true });
-                    await batch.commit();
-                    localLastReset = today; 
-                } catch (err) {
-                    console.error("Error durante el reseteo diario:", err);
-                } finally {
-                    showLoading(false);
-                }
-            } else if (!localLastReset) {
-                console.log("Estableciendo fecha de reseteo inicial.");
-                await setDoc(globalProfileRef, { lastReset: today }, { merge: true });
-                localLastReset = today;
-            }
-        }
-
+        
         // --- Lógica de Admin ---
         function populateAdminSelects() {
             const selectsToPopulate = [
@@ -574,7 +550,7 @@
             
             selectsToPopulate.forEach(select => {
                 if (!select) return;
-                select.innerHTML = '<option value="">Selecciona un hijo...</option>'; 
+                select.innerHTML = '<option value="">Selecciona un hijo...</option>'; // Reset
                 localChildren.forEach(child => {
                     const option = document.createElement('option');
                     option.value = child.id;
@@ -584,11 +560,12 @@
             });
         }
 
+        // Contexto que se activa al seleccionar un hijo en un panel de admin
         function setupAdminPageContext(childId, pageKey) {
-            clearChildContext(); 
+            clearChildContext(); // Limpia listeners y datos anteriores
             
             if (!childId) {
-                return; 
+                return; // No hay hijo seleccionado
             }
             const child = localChildren.find(c => c.id === childId);
             if (!child) return;
@@ -598,7 +575,7 @@
             localTotalPoints = child.totalPoints;
 
             setupChildFirestoreReferences(childId);
-            setupChildFirestoreListeners(); 
+            setupChildFirestoreListeners(); // Activa listeners para tasks y pending
         }
 
 
@@ -799,7 +776,8 @@
 
         function renderRedeemedRewardsList() {
             if (!containers.redeemedRewardsList) return;
-            // TODO: Implementar
+            containers.redeemedRewardsList.innerHTML = '';
+            // TODO: Implementar listener y renderizado
             containers.redeemedRewardsList.innerHTML = '<p class="text-gray-500 text-center">Historial de canjes...</p>';
         }
 
@@ -862,7 +840,7 @@
         function renderPointsHistory() {
             if (!containers.pointsHistoryList) return;
             containers.pointsHistoryList.innerHTML = '';
-            if (!currentChildId) return; 
+            if (!currentChildId) return; // No mostrar si no hay hijo
             
             if (localPointsHistory.length === 0) {
                  containers.pointsHistoryList.innerHTML = '<p class="text-gray-500 text-center">Aún no hay historial.</p>';
@@ -896,6 +874,7 @@
         function startEditChild(id, name, gender) {
             currentEditingChildId = id;
             elements.editChildName.value = name;
+            // Marca el radio button correcto
             document.querySelector(`#form-edit-child input[name="edit-gender"][value="${gender}"]`).checked = true;
             forms['form-edit-child'].classList.remove('hidden');
             forms['form-add-child'].classList.add('hidden');
@@ -955,10 +934,11 @@
 
         // --- Handlers (Firebase) ---
 
+        // Función para añadir al historial de puntos (Global)
         async function addPointsHistory(childId, childName, reason, points) {
-            if (!globalPointsHistoryRef) return;
+            if (!pointsHistoryRef) return;
             try {
-                await addDoc(globalPointsHistoryRef, {
+                await addDoc(pointsHistoryRef, {
                     childId,
                     childName,
                     reason,
@@ -973,9 +953,10 @@
         // Gestión de Hijos
         async function handleAddChild(e) {
             e.preventDefault();
+            if (!childrenRef) return;
             const name = e.target['child-name'].value;
             const gender = e.target['gender'].value;
-            if (!name || !gender || !childrenRef) return;
+            if (!name || !gender) return;
             showLoading(true);
             try { 
                 await addDoc(childrenRef, { name, gender, totalPoints: 0 }); 
@@ -1012,7 +993,7 @@
         // Gestión de Tareas (por hijo)
         async function handleAddTask(e) {
             e.preventDefault();
-            if (!currentChildId || !childTasksRef) {
+            if (!currentChildId || !tasksRef) {
                 alert("Selecciona un hijo primero.");
                 return;
             }
@@ -1020,26 +1001,26 @@
             const points = parseInt(e.target['task-points'].value, 10);
             if (!name || points <= 0) return;
             showLoading(true);
-            try { await addDoc(childTasksRef, { name, points }); e.target.reset(); } 
+            try { await addDoc(tasksRef, { name, points }); e.target.reset(); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
         async function handleEditTaskSubmit(e) {
             e.preventDefault();
-            if (!currentEditingTaskId || !childTasksRef) return;
+            if (!currentEditingTaskId || !tasksRef) return;
             const name = elements.editTaskName.value;
             const points = parseInt(elements.editTaskPoints.value, 10);
             showLoading(true);
             try {
-                await updateDoc(doc(db, childTasksRef.path, currentEditingTaskId), { name, points });
+                await updateDoc(doc(db, tasksRef.path, currentEditingTaskId), { name, points });
                 cancelEditTask();
             } catch (err) { console.error(err); }
             finally { showLoading(false); }
         }
         async function handleDeleteTask(taskId) {
-            if (!childTasksRef) return;
+            if (!tasksRef) return;
             showLoading(true);
-            try { await deleteDoc(doc(db, childTasksRef.path, taskId)); } 
+            try { await deleteDoc(doc(db, tasksRef.path, taskId)); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
@@ -1047,31 +1028,31 @@
         // Gestión de Recompensas (Global)
         async function handleAddReward(e) {
             e.preventDefault();
-            if (!globalRewardsRef) return;
+            if (!rewardsRef) return;
             const name = e.target['reward-name'].value;
             const cost = parseInt(e.target['reward-cost'].value, 10);
             if (!name || cost <= 0) return;
             showLoading(true);
-            try { await addDoc(globalRewardsRef, { name, cost }); e.target.reset(); } 
+            try { await addDoc(rewardsRef, { name, cost }); e.target.reset(); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
         async function handleEditRewardSubmit(e) {
             e.preventDefault();
-            if (!currentEditingRewardId || !globalRewardsRef) return;
+            if (!currentEditingRewardId || !rewardsRef) return;
             const name = elements.editRewardName.value;
             const cost = parseInt(elements.editRewardCost.value, 10);
             showLoading(true);
             try {
-                await updateDoc(doc(db, globalRewardsRef.path, currentEditingRewardId), { name, cost });
+                await updateDoc(doc(db, rewardsRef.path, currentEditingRewardId), { name, cost });
                 cancelEditReward();
             } catch (err) { console.error(err); }
             finally { showLoading(false); }
         }
         async function handleDeleteReward(id) {
-            if (!globalRewardsRef) return;
+            if (!rewardsRef) return;
             showLoading(true);
-            try { await deleteDoc(doc(db, globalRewardsRef.path, id)); } 
+            try { await deleteDoc(doc(db, rewardsRef.path, id)); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
@@ -1079,31 +1060,31 @@
         // Gestión de Penalidades (Global)
          async function handleAddPenalty(e) {
             e.preventDefault();
-            if (!globalPenaltiesRef) return;
+            if (!penaltiesRef) return;
             const name = e.target['penalty-name'].value;
             const points = parseInt(e.target['penalty-points'].value, 10);
             if (!name || points <= 0) return;
             showLoading(true);
-            try { await addDoc(globalPenaltiesRef, { name, points: Math.abs(points) }); e.target.reset(); } 
+            try { await addDoc(penaltiesRef, { name, points: Math.abs(points) }); e.target.reset(); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
         async function handleEditPenaltySubmit(e) {
             e.preventDefault();
-            if (!currentEditingPenaltyId || !globalPenaltiesRef) return;
+            if (!currentEditingPenaltyId || !penaltiesRef) return;
             const name = elements.editPenaltyName.value;
             const points = parseInt(elements.editPenaltyPoints.value, 10);
             showLoading(true);
             try {
-                await updateDoc(doc(db, globalPenaltiesRef.path, currentEditingPenaltyId), { name, points: Math.abs(points) });
+                await updateDoc(doc(db, penaltiesRef.path, currentEditingPenaltyId), { name, points: Math.abs(points) });
                 cancelEditPenalty();
             } catch (err) { console.error(err); }
             finally { showLoading(false); }
         }
         async function handleDeletePenalty(id) {
-            if (!globalPenaltiesRef) return;
+            if (!penaltiesRef) return;
             showLoading(true);
-            try { await deleteDoc(doc(db, globalPenaltiesRef.path, id)); } 
+            try { await deleteDoc(doc(db, penaltiesRef.path, id)); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
@@ -1111,15 +1092,15 @@
         // --- Handlers de Flujo de Puntos (Por Hijo) ---
         
         async function handleCompleteTask(taskId, name, points) {
-            if (!currentChildId || !childPendingTasksRef) return;
+            if (!currentChildId || !pendingTasksRef) return;
             showLoading(true);
-            try { await addDoc(childPendingTasksRef, { taskId, name, points, requestedAt: serverTimestamp() }); } 
+            try { await addDoc(pendingTasksRef, { taskId, name, points, requestedAt: serverTimestamp() }); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
         
         async function handleApproveTask(id, name, points) {
-            if (!currentChildId || !childPendingTasksRef || !childrenRef) return;
+            if (!currentChildId || !pendingTasksRef || !childrenRef) return;
             showLoading(true);
             try {
                 const newTotal = (localTotalPoints || 0) + points;
@@ -1127,9 +1108,10 @@
                 
                 const batch = writeBatch(db);
                 batch.update(childDocRef, { totalPoints: newTotal });
-                batch.delete(doc(db, childPendingTasksRef.path, id));
+                batch.delete(doc(db, pendingTasksRef.path, id));
                 await batch.commit();
 
+                // Añadir al historial
                 await addPointsHistory(currentChildId, currentChildName, `Tarea: ${name}`, points);
 
             } catch (err) { console.error(err); } 
@@ -1137,15 +1119,15 @@
         }
         
         async function handleRejectTask(id) {
-            if (!childPendingTasksRef) return;
+            if (!pendingTasksRef) return;
             showLoading(true);
-            try { await deleteDoc(doc(db, childPendingTasksRef.path, id)); } 
+            try { await deleteDoc(doc(db, pendingTasksRef.path, id)); } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
         
         async function handleRedeemReward(id, name, cost) {
-            if (localTotalPoints < cost || !currentChildId || !childrenRef || !globalRedeemedRef) return;
+            if (localTotalPoints < cost || !currentChildId || !childrenRef || !redeemedRewardsRef) return;
             showLoading(true);
             try {
                 const newTotal = localTotalPoints - cost;
@@ -1153,10 +1135,12 @@
                 
                 const batch = writeBatch(db);
                 batch.update(childDocRef, { totalPoints: newTotal });
-                const newRef = doc(collection(db, globalRedeemedRef.path));
+                // Añadir a canjeados (global)
+                const newRef = doc(collection(db, redeemedRewardsRef.path));
                 batch.set(newRef, { childId: currentChildId, childName: currentChildName, name, cost, redeemedAt: serverTimestamp() });
                 await batch.commit();
                 
+                // Añadir al historial
                 await addPointsHistory(currentChildId, currentChildName, `Canje: ${name}`, -cost);
                 
             } catch (err) { console.error(err); } 
@@ -1171,6 +1155,7 @@
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 await updateDoc(childDocRef, { totalPoints: newTotal });
                 
+                // Añadir al historial
                 await addPointsHistory(currentChildId, currentChildName, `Penalidad: ${name}`, -points);
 
             } catch (err) {
@@ -1181,15 +1166,54 @@
         }
 
 
+        // --- DEFINICIÓN DE RUTAS DE FIREBASE (Multi-Familia) ---
+
+        // Rutas globales que se definen una vez que el admin se loguea
+        function setupGlobalFirestoreReferences(adminUserId) {
+            if (!adminUserId) return;
+            
+            // Corrección: La "caja fuerte" es el DOCUMENTO del usuario (familia)
+            familyDocRef = doc(db, 'familias', adminUserId);
+            
+            // Las colecciones (hijos, recompensas...) cuelgan DEBAJO de ese documento
+            childrenRef = collection(db, familyDocRef.path, 'children');
+            rewardsRef = collection(db, familyDocRef.path, 'rewards');
+            penaltiesRef = collection(db, familyDocRef.path, 'penalties');
+            redeemedRewardsRef = collection(db, familyDocRef.path, 'redeemedRewards');
+            pointsHistoryRef = collection(db, familyDocRef.path, 'pointsHistory');
+        }
+
+        // Rutas que dependen del hijo seleccionado
+        function setupChildFirestoreReferences(childId) {
+            if (!childId || !childrenRef) {
+                console.error("¡No se puede definir la ruta sin childId o childrenRef!");
+                tasksRef = null;
+                pendingTasksRef = null;
+                return;
+            }
+            // Las tareas también cuelgan de la "caja fuerte" de la familia,
+            // pero se filtran por 'childId'
+            tasksRef = collection(db, familyDocRef.path, 'tasks');
+            pendingTasksRef = collection(db, familyDocRef.path, 'pendingTasks');
+        }
+
         // --- Listeners de DB ---
         function setupGlobalFirestoreListeners() {
-            if (!globalProfileRef) return; 
+            if (!currentUserId || !familyDocRef) return;
             
-            globalProfileListener = onSnapshot(globalProfileRef, (doc) => {
+            // Limpia listeners globales anteriores
+            if (familyDocListener) familyDocListener();
+            if (childrenListener) childrenListener();
+            if (rewardsListener) rewardsListener();
+            if (penaltiesListener) penaltiesListener();
+            if (redeemedRewardsListener) redeemedRewardsListener();
+
+            // Listener para el documento de familia (reseteo)
+            familyDocListener = onSnapshot(familyDocRef, (doc) => {
                 if (doc.exists()) {
                     localLastReset = doc.data().lastReset || null;
                 } else { 
-                    setDoc(globalProfileRef, { lastReset: new Date().toISOString().split('T')[0] });
+                    setDoc(familyDocRef, { adminId: currentUserId, lastReset: new Date().toISOString().split('T')[0] });
                     localLastReset = new Date().toISOString().split('T')[0];
                 }
                 
@@ -1197,85 +1221,84 @@
                      checkDailyReset(); 
                 }
                
-            }, (error) => console.error("Error en listener de globalProfileRef:", error));
+            }, (error) => console.error("Error en listener de familyDocRef:", error));
 
+            // Listener para Hijos
             childrenListener = onSnapshot(childrenRef, (s) => {
                 localChildren = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderChildLoginList();
                 renderChildrenEditList();
                 if(localUserMode === 'admin') populateAdminSelects();
                 
+                // Si estoy logueado como hijo, actualiza mis puntos
                 if(localUserMode === 'child' && currentChildId) {
                     const myData = localChildren.find(c => c.id === currentChildId);
                     if (myData) {
                         localTotalPoints = myData.totalPoints;
                         updatePointsDisplay();
                     } else {
-                        logout();
+                        logout(); // Me han borrado
                     }
-                } else if (localUserMode !== 'admin') {
-                     // Si no estoy en modo admin y no estoy logueado como hijo
-                     // (ej. acabo de loguear como admin)
-                     // O si es la primera carga tras login de admin
-                     // Muestra el login de hijos si es necesario
-                     if (localUserMode === 'unknown' && auth.currentUser) {
-                        checkCachedMode(auth.currentUser);
-                     }
                 }
+                
+                // Carga inicial de datos de la familia (si es necesario)
+                if (!hasInitialDataLoaded) {
+                    // Aquí podrías llamar a popular tareas, penalidades, etc.
+                    hasInitialDataLoaded = true; 
+                }
+
             }, (error) => console.error("Error en listener de childrenRef:", error));
 
-            globalRewardsListener = onSnapshot(globalRewardsRef, (s) => {
+            // Listeners Globales (Recompensas y Penalidades de la familia)
+            rewardsListener = onSnapshot(rewardsRef, (s) => {
                 localRewards = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderRewardsList();
                 renderRewardsEditList(); 
-            }, (error) => console.error("Error en listener de globalRewardsRef:", error));
+            }, (error) => console.error("Error en listener de rewardsRef:", error));
 
-            globalPenaltiesListener = onSnapshot(globalPenaltiesRef, (s) => {
+            penaltiesListener = onSnapshot(penaltiesRef, (s) => {
                 localPenalties = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderPenaltiesApplyList();
                 renderPenaltiesEditList();
-            }, (error) => console.error("Error en listener de globalPenaltiesRef:", error));
+            }, (error) => console.error("Error en listener de penaltiesRef:", error));
             
-            // TODO: Listener para canjeados globales
+            // TODO: Listener para canjeados
+            // redeemedRewardsListener = onSnapshot(redeemedRewardsRef, ...);
         }
 
-
         function setupChildFirestoreListeners() {
+            // Limpia listeners de hijo anteriores
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
-            if(historyListener) historyListener();
+            if(pointsHistoryListener) pointsHistoryListener();
             
-            if (!currentChildId || !childTasksRef) return;
+            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef) return;
 
-            tasksListener = onSnapshot(childTasksRef, (s) => {
+            // Listener para Tareas del hijo (filtradas)
+            const tasksQuery = query(tasksRef, where("childId", "==", currentChildId));
+            tasksListener = onSnapshot(tasksQuery, (s) => {
                 localTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderTasksList();
                 if(localUserMode === 'admin') renderActiveTasksEditList();
             }, (error) => console.error("Error en listener de childTasksRef:", error));
 
-            pendingTasksListener = onSnapshot(childPendingTasksRef, (s) => {
+            // Listener para Pendientes del hijo (filtradas)
+            const pendingQuery = query(pendingTasksRef, where("childId", "==", currentChildId));
+            pendingTasksListener = onSnapshot(pendingQuery, (s) => {
                 localPendingTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
-                renderTasksList(); 
+                renderTasksList(); // Actualiza los 'checks'
                 if(localUserMode === 'admin') renderPendingTasksList();
             }, (error) => console.error("Error en listener de childPendingTasksRef:", error));
 
-            const historyQuery = query(globalPointsHistoryRef, where("childId", "==", currentChildId), limit(50));
-            historyListener = onSnapshot(historyQuery, (s) => {
-                let historyData = s.docs.map(d => {
-                    const data = d.data();
-                    if (data.timestamp && data.timestamp.toDate) {
-                        data.timestamp = data.timestamp.toDate();
-                    } else {
-                        data.timestamp = new Date(0); 
-                    }
-                    return data;
-                });
-                
-                historyData.sort((a, b) => b.timestamp - a.timestamp);
-                localPointsHistory = historyData.slice(0, 20);
-                
+            // Listener para Historial de Puntos del hijo (filtradas)
+            const historyQuery = query(pointsHistoryRef, where("childId", "==", currentChildId), orderBy("timestamp", "desc"), limit(20));
+            pointsHistoryListener = onSnapshot(historyQuery, (s) => {
+                localPointsHistory = s.docs.map(d => d.data());
                 renderPointsHistory();
-            }, (error) => console.error("Error en listener de globalPointsHistoryRef:", error));
+            }, (error) => {
+                console.error("Error en listener de pointsHistoryRef:", error);
+                // Si da error de índice, puedes quitar el orderBy y ordenar en cliente
+            });
         }
 
     </script>
@@ -1294,50 +1317,53 @@
 
     <div class="container mx-auto max-w-lg p-4 min-h-screen relative">
         <!-- Overlay de Carga -->
-        <div id="page-loading" class="fixed inset-0 bg-white flex justify-center items-center z-50">
+        <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-80 flex justify-center items-center z-50 hidden">
             <div class="loader border-4 border-blue-200 border-t-blue-600 rounded-full w-12 h-12"></div>
         </div>
 
         <!-- === Página de Login === -->
-        <div id="page-login" class="hidden">
+        <div id="page-login" class="">
              <header class="text-center mb-12 mt-16">
                 <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">App de Recompensas</h1>
                 <p class="text-xl text-gray-600 mt-4">Inicia sesión o crea una cuenta</p>
             </header>
-            <div class="space-y-4">
-                <button id="btn-login-google" class="w-full bg-white text-gray-700 p-4 rounded-lg shadow-md border border-gray-200 flex justify-center items-center gap-3 hover:bg-gray-50 transition-colors">
-                    <svg class="w-6 h-6" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.79 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.94 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.46 2.09 14.97 1 12 1 7.7 1 3.99 3.06 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/><path fill="none" d="M1 1h22v22H1z"/></svg>
-                    <span class="font-bold">Continuar con Google</span>
+            <div class="space-y-4 max-w-sm mx-auto">
+                <button id="btn-login-google" class="w-full bg-white border border-gray-300 text-gray-700 p-3 rounded-lg flex items-center justify-center gap-3 hover:bg-gray-50 transition-colors shadow-sm">
+                    <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"></path><path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"></path><path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"></path><path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571l6.19,5.238C39.712,34.464,44,28.098,44,20C44,22.659,43.862,21.35,43.611,20.083z"></body "></path></svg>
+                    <span class="text-lg font-medium">Continuar con Google</span>
                 </button>
                 
-                <div class="relative flex py-2 items-center">
+                <div class="flex items-center">
                     <div class="flex-grow border-t border-gray-300"></div>
-                    <span class="flex-shrink mx-4 text-gray-500">o</span>
+                    <span class="mx-4 text-gray-500 text-sm">o</span>
                     <div class="flex-grow border-t border-gray-300"></div>
                 </div>
 
-                <button id="btn-show-email-login" class="w-full bg-gray-600 text-white p-4 rounded-lg font-bold hover:bg-gray-700">Continuar con Email</button>
-                
-                <div id="email-login-form" class="hidden bg-white p-4 rounded-lg shadow-md border">
-                    <form id="form-email-login" class="space-y-3">
-                        <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
-                        <input type="password" name="password" placeholder="Contraseña" class="w-full p-3 border rounded-lg" required>
-                        <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Iniciar Sesión</button>
-                        <p id="login-error" class="text-red-500 text-sm hidden"></p>
-                    </form>
-                </div>
-                
-                <button id="btn-show-email-register" class="w-full text-center text-blue-600 hover:underline">No tengo cuenta (Crear una)</button>
-                
-                <div id="email-register-form" class="hidden bg-white p-4 rounded-lg shadow-md border">
-                    <form id="form-email-register" class="space-y-3">
-                        <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
-                        <input type="password" name="password" placeholder="Contraseña (mín. 6 caracteres)" class="w-full p-3 border rounded-lg" required>
-                        <button type="submit" class="w-full bg-green-500 text-white p-3 rounded-lg font-bold">Crear Cuenta</button>
-                        <p id="register-error" class="text-red-500 text-sm hidden"></p>
-                    </form>
-                </div>
+                <button id="btn-show-email-login" class="w-full bg-gray-700 text-white p-3 rounded-lg flex items-center justify-center gap-3 hover:bg-gray-800 transition-colors shadow-sm">
+                    <span class="text-lg font-medium">Continuar con Email</span>
+                </button>
 
+                <!-- Formulario Login Email -->
+                <form id="form-email-login" class="hidden space-y-4 pt-4 border-t border-gray-200">
+                    <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
+                    <input type="password" name="password" placeholder="Contraseña" class="w-full p-3 border rounded-lg" required>
+                    <p id="login-error" class="text-red-500 text-sm hidden"></p>
+                    <button type="submit" class="w-full bg-blue-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-blue-700 transition-colors">Iniciar Sesión</button>
+                    <p class="text-center text-sm">
+                        <a href="#" id="btn-show-email-register" class="text-blue-600 hover:underline">No tengo cuenta (Crear una)</a>
+                    </p>
+                </form>
+
+                <!-- Formulario Registro Email -->
+                <form id="form-email-register" class="hidden space-y-4 pt-4 border-t border-gray-200">
+                    <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
+                    <input type="password" name="password" placeholder="Contraseña (mín. 6 caracteres)" class="w-full p-3 border rounded-lg" required>
+                    <p id="register-error" class="text-red-500 text-sm hidden"></p>
+                    <button type="submit" class="w-full bg-green-600 text-white p-3 rounded-lg font-bold text-lg hover:bg-green-700 transition-colors">Crear Cuenta</button>
+                    <p class="text-center text-sm">
+                        <a href="#" class="text-blue-600 hover:underline" onclick="event.preventDefault(); showLoginForm('login');">Ya tengo cuenta (Iniciar Sesión)</a>
+                    </p>
+                </form>
             </div>
         </div>
         
@@ -1348,40 +1374,42 @@
                 <p class="text-center text-gray-600 mb-6">Ingresa el PIN para volver al panel de admin.</p>
                 <form id="form-pin" class="space-y-4">
                     <input type="password" id="pin-input" pattern="[0-9]*" inputmode="numeric" maxlength="4" class="w-full p-4 text-3xl text-center tracking-widest border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-blue-500" required>
-                    <p id="pin-error" class="text-red-500 text-center hidden">PIN incorrecto.</p>
-                    <button type="submit" id="btn-pin-submit" class="w-full bg-blue-500 text-white p-4 rounded-lg font-bold text-lg hover:bg-blue-600 transition-colors">Entrar</button>
+                    <p id="pin-error" class="text-red-500 text-center hidden">PIN incorrecto. Intenta de nuevo.</p>
+                    <button type="submit" id="btn-pin-validate" class="w-full bg-blue-500 text-white p-4 rounded-lg font-bold text-lg hover:bg-blue-600 transition-colors">Entrar</button>
                     <button type="button" id="btn-pin-cancel" class="w-full bg-gray-200 text-gray-700 p-3 rounded-lg font-bold hover:bg-gray-300 transition-colors">Cancelar</button>
                 </form>
             </div>
         </div>
 
-        <!-- === Página Principal (Admin y selección de Hijo) === -->
+        <!-- === Página Principal (Admin o Selección de Hijo) === -->
         <div id="page-main" class="hidden">
-            <!-- Header Admin -->
-            <header class="admin-only flex justify-between items-center mb-8 mt-4">
+            <header class="flex justify-between items-center mb-8 mt-4">
                 <div class="text-left">
-                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">Panel Admin</h1>
-                    <p id="admin-name-header" class="text-sm text-gray-600"></p>
+                    <!-- Vista Admin -->
+                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight admin-only">Panel Admin</h1>
+                    
+                    <!-- Vista Hijo -->
+                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight child-only" id="child-name-header">Hola!</h1>
+                    <div id="total-points-header" class="text-2xl font-bold text-yellow-500 mt-1 child-only">...</div>
                 </div>
-                <button id="btn-admin-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
+                <button id="btn-logout" class="hidden bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
             </header>
-            <!-- Header Hijo -->
-             <header class="child-only flex justify-between items-center mb-8 mt-4">
-                <div class="text-left">
-                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight" id="child-name-header">Hola!</h1>
-                    <div id="total-points-header" class="text-2xl font-bold text-yellow-500 mt-1">...</div>
+
+            <!-- Panel de Selección de Hijo (Admin) -->
+            <div class="admin-only">
+                <p class="text-xl text-gray-600 mt-4 mb-6">¿Qué quieres hacer?</p>
+                <div class="space-y-4 mb-8">
+                    <!-- Lista de hijos para loguear -->
+                    <div id="child-login-list" class="space-y-4"></div>
                 </div>
-                <button id="btn-child-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Volver</button>
-            </header>
-            
-            <!-- Login de Hijos (visible en modo Admin) -->
-            <div class="admin-only mb-6">
-                <h2 class="text-2xl font-bold text-gray-800 mb-4">Acceder como:</h2>
-                <div id="child-login-list" class="space-y-4">
-                    <!-- Botones de hijos (ej. 👧 Ana) se insertan aquí -->
+                <div class="flex items-center mb-8">
+                    <div class="flex-grow border-t border-gray-300"></div>
+                    <span class="mx-4 text-gray-500 text-sm">PANEL ADMIN</span>
+                    <div class="flex-grow border-t border-gray-300"></div>
                 </div>
             </div>
 
+            <!-- Menú Principal -->
             <nav class="grid grid-cols-2 gap-4">
                 <!-- Botones de Hijo -->
                 <button id="btn-tasks" class="main-menu-button bg-blue-500 child-only">
@@ -1570,7 +1598,7 @@
             
             <!-- SECCIÓN ADMIN PARA AÑADIR/EDITAR RECOMPENSAS -->
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Nueva Recompensa (para tu familia)</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Nueva Recompensa (Global)</h2>
                 <form id="form-add-reward" class="space-y-3">
                     <input type="text" id="reward-name" placeholder="Nombre del premio" class="w-full p-3 border rounded-lg" required>
                     <input type="number" id="reward-cost" placeholder="Costo" class="w-full p-3 border rounded-lg" required>
@@ -1589,7 +1617,7 @@
             </div>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Recompensas</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Recompensas (Global)</h2>
                 <div id="rewards-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
             </div>
 
@@ -1622,7 +1650,7 @@
             </div>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Penalidad (para tu familia)</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Penalidad (Global)</h2>
                 <form id="form-add-penalty" class="space-y-3">
                     <input type="text" id="penalty-name" placeholder="Nombre de la penalidad" class="w-full p-3 border rounded-lg" required>
                     <input type="number" id="penalty-points" placeholder="Puntos (ej: 150)" class="w-full p-3 border rounded-lg" required>
@@ -1641,13 +1669,11 @@
             </div>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Penalidades</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Penalidades (Global)</h2>
                 <div id="penalties-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
             </div>
         </div>
 
     </div>
 </body>
-
 </html>
-
