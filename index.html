@@ -42,14 +42,14 @@
         // --- Configuración de Firebase ---
         // ¡¡IMPORTANTE!! DEBES REEMPLAZAR ESTO CON TUS PROPIAS LLAVES
         const firebaseConfig = {
-  apiKey: "AIzaSyDBzsAiJQ6ktFWUxYSpWDXsWdBwMoW3bNo",
-  authDomain: "app-recompensas-familias.firebaseapp.com",
-  projectId: "app-recompensas-familias",
-  storageBucket: "app-recompensas-familias.firebasestorage.app",
-  messagingSenderId: "680945319622",
-  appId: "1:680945319622:web:782abbf670e7899b1961c7",
-  measurementId: "G-EPPYQC4FGQ"
-};
+            apiKey: "AIzaSyDBzsAiJQ6ktFWUxYSpWDXsWdBwMoW3bNo",
+            authDomain: "app-recompensas-familias.firebaseapp.com",
+            projectId: "app-recompensas-familias",
+            storageBucket: "app-recompensas-familias.firebasestorage.app",
+            messagingSenderId: "680945319622",
+            appId: "1:680945319622:web:782abbf670e7899b1961c7",
+            measurementId: "G-EPPYQC4FGQ"
+        };
         
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'multi-family-reward-app';
         
@@ -153,6 +153,7 @@
                 'btn-penalties': document.getElementById('btn-penalties'),
                 'btn-manage-children': document.getElementById('btn-manage-children'),
                 'btn-manage-tasks': document.getElementById('btn-manage-tasks'),
+                'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'), // <-- Botón de candado añadido
                 back: document.querySelectorAll('.btn-back')
             };
 
@@ -237,16 +238,15 @@
             buttons['btn-manage-children'].addEventListener('click', () => showPage('page-manage-children'));
             buttons['btn-manage-tasks'].addEventListener('click', () => showPage('page-manage-tasks'));
             
+            // *** CORRECCIÓN DE BOTÓN 'ATRÁS' ***
             buttons.back.forEach(btn => {
                 btn.addEventListener('click', () => {
-                    // Si salimos de una página de hijo, volvemos a la selección de hijo
-                    if (localUserMode === 'child') {
-                        setAdminMode(currentUserId); // Vuelve al panel de admin
-                    }
-                    // Limpia los selects de admin al volver al menú
+                    // Si salimos de una página de admin, volvemos al panel de admin
                     if (localUserMode === 'admin') {
                         clearAdminSelects();
                     }
+                    // Si es 'child', no hace nada especial, solo muestra page-main
+                    // Esto evita que el niño salga al modo admin por error.
                     showPage('page-main');
                 });
             });
@@ -254,6 +254,10 @@
             // PIN Modal
             forms['form-pin'].addEventListener('submit', handlePinValidate);
             buttons['btn-pin-cancel'].addEventListener('click', () => showPage('page-main'));
+
+            // *** NUEVO LISTENER ***
+            // Listener para el nuevo botón de "Salir a Admin" (Candado)
+            buttons['btn-exit-child-mode'].addEventListener('click', handleShowPinModal);
 
 
             // Forms Admin - Gestión de Hijos
@@ -406,6 +410,14 @@
             showPage('page-main');
         }
 
+        // *** NUEVA FUNCIÓN ***
+        function handleShowPinModal() {
+            // Limpia el input y el error por si acaso
+            elements.pinInput.value = '';
+            elements.pinError.classList.add('hidden');
+            showPage('page-pin-modal');
+        }
+
         function handlePinValidate(e) {
             e.preventDefault();
             const pin = elements.pinInput.value;
@@ -426,14 +438,17 @@
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.remove('hidden'));
                 buttons['btn-logout'].classList.add('hidden'); // Ocultar logout en modo hijo
+                buttons['btn-exit-child-mode'].classList.remove('hidden'); // <-- Mostrar candado
             } else if (mode === 'admin') {
                 adminElements.forEach(el => el.classList.remove('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
                 buttons['btn-logout'].classList.remove('hidden'); // Mostrar logout en modo admin
+                buttons['btn-exit-child-mode'].classList.add('hidden'); // <-- Ocultar candado
             } else {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
                 buttons['btn-logout'].classList.add('hidden');
+                buttons['btn-exit-child-mode'].classList.add('hidden'); // <-- Ocultar candado
             }
         }
 
@@ -450,8 +465,9 @@
                     
                     // Limpiar TAREAS PENDIENTES de TODOS los hijos de ESTA familia
                     for (const child of localChildren) {
-                        const childPendingTasksPath = collection(db, childrenRef.path, child.id, 'pendingTasks');
-                        const pendingSnapshot = await getDocs(childPendingTasksPath);
+                        // CORRECCIÓN: Usar la referencia global a pendingTasksRef y filtrar por child.id
+                        const childPendingTasksQuery = query(pendingTasksRef, where("childId", "==", child.id));
+                        const pendingSnapshot = await getDocs(childPendingTasksQuery);
                         pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
                     }
                     
@@ -517,7 +533,7 @@
         
         function clearAdminSelects() {
              Object.values(selects).forEach(select => {
-                if (select) select.value = "";
+                 if (select) select.value = "";
              });
              clearChildContext(); // Limpia los datos del hijo seleccionado
         }
@@ -525,11 +541,11 @@
         function showPage(pageId) {
             if (pages[pageId]) {
                  Object.values(pages).forEach(page => {
-                    if (page) page.classList.add('hidden');
-                });
-                pages[pageId].classList.remove('hidden');
+                     if (page) page.classList.add('hidden');
+                 });
+                 pages[pageId].classList.remove('hidden');
             } else {
-                console.warn(`Página no encontrada: ${pageId}`);
+                 console.warn(`Página no encontrada: ${pageId}`);
             }
         }
 
@@ -551,6 +567,7 @@
             
             selectsToPopulate.forEach(select => {
                 if (!select) return;
+                const currentValue = select.value; // Guardar el valor actual
                 select.innerHTML = '<option value="">Selecciona un hijo...</option>'; // Reset
                 localChildren.forEach(child => {
                     const option = document.createElement('option');
@@ -558,6 +575,7 @@
                     option.textContent = child.name;
                     select.appendChild(option);
                 });
+                select.value = currentValue; // Restaurar el valor si aún existe
             });
         }
 
@@ -1002,7 +1020,15 @@
             const points = parseInt(e.target['task-points'].value, 10);
             if (!name || points <= 0) return;
             showLoading(true);
-            try { await addDoc(tasksRef, { name, points }); e.target.reset(); } 
+            try { 
+                // *** 1ª CORRECCIÓN APLICADA AQUÍ ***
+                await addDoc(tasksRef, { 
+                    name, 
+                    points, 
+                    childId: currentChildId 
+                }); 
+                e.target.reset(); 
+            } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
@@ -1095,7 +1121,16 @@
         async function handleCompleteTask(taskId, name, points) {
             if (!currentChildId || !pendingTasksRef) return;
             showLoading(true);
-            try { await addDoc(pendingTasksRef, { taskId, name, points, requestedAt: serverTimestamp() }); } 
+            try { 
+                // *** 2ª CORRECCIÓN APLICADA AQUÍ ***
+                await addDoc(pendingTasksRef, { 
+                    taskId, 
+                    name, 
+                    points, 
+                    requestedAt: serverTimestamp(),
+                    childId: currentChildId // Añadido
+                }); 
+            } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
         }
@@ -1182,20 +1217,21 @@
             penaltiesRef = collection(db, familyDocRef.path, 'penalties');
             redeemedRewardsRef = collection(db, familyDocRef.path, 'redeemedRewards');
             pointsHistoryRef = collection(db, familyDocRef.path, 'pointsHistory');
-        }
-
-        // Rutas que dependen del hijo seleccionado
-        function setupChildFirestoreReferences(childId) {
-            if (!childId || !childrenRef) {
-                console.error("¡No se puede definir la ruta sin childId o childrenRef!");
-                tasksRef = null;
-                pendingTasksRef = null;
-                return;
-            }
-            // Las tareas también cuelgan de la "caja fuerte" de la familia,
-            // pero se filtran por 'childId'
+            
+            // Las tareas y pendientes también son globales de la familia
             tasksRef = collection(db, familyDocRef.path, 'tasks');
             pendingTasksRef = collection(db, familyDocRef.path, 'pendingTasks');
+        }
+
+        // Rutas que dependen del hijo seleccionado (YA NO ES NECESARIO)
+        function setupChildFirestoreReferences(childId) {
+            // Ya no necesitamos definir referencias aquí, 
+            // tasksRef y pendingTasksRef son globales (de la familia)
+            // Filtraremos por 'childId' en los listeners
+            if (!childId || !childrenRef) {
+                console.error("¡No se puede definir la ruta sin childId o childrenRef!");
+                return;
+            }
         }
 
         // --- Listeners de DB ---
@@ -1218,10 +1254,11 @@
                     localLastReset = new Date().toISOString().split('T')[0];
                 }
                 
-                if (localChildren.length > 0) {
+                // Solo chequear reseteo si ya cargaron los hijos
+                if (localChildren.length > 0 || hasInitialDataLoaded) {
                      checkDailyReset(); 
                 }
-               
+                
             }, (error) => console.error("Error en listener de familyDocRef:", error));
 
             // Listener para Hijos
@@ -1244,8 +1281,8 @@
                 
                 // Carga inicial de datos de la familia (si es necesario)
                 if (!hasInitialDataLoaded) {
-                    // Aquí podrías llamar a popular tareas, penalidades, etc.
                     hasInitialDataLoaded = true; 
+                    checkDailyReset(); // Ahora sí podemos chequear el reseteo
                 }
 
             }, (error) => console.error("Error en listener de childrenRef:", error));
@@ -1325,12 +1362,12 @@
         <!-- === Página de Login === -->
         <div id="page-login" class="">
              <header class="text-center mb-12 mt-16">
-                <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">App de Recompensas</h1>
-                <p class="text-xl text-gray-600 mt-4">Inicia sesión o crea una cuenta</p>
-            </header>
+                 <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">App de Recompensas</h1>
+                 <p class="text-xl text-gray-600 mt-4">Inicia sesión o crea una cuenta</p>
+             </header>
             <div class="space-y-4 max-w-sm mx-auto">
                 <button id="btn-login-google" class="w-full bg-white border border-gray-300 text-gray-700 p-3 rounded-lg flex items-center justify-center gap-3 hover:bg-gray-50 transition-colors shadow-sm">
-                    <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"></path><path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"></path><path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"></path><path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571l6.19,5.238C39.712,34.464,44,28.098,44,20C44,22.659,43.862,21.35,43.611,20.083z"></body "></path></svg>
+                    <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"></path><path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"></path><path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"></path><path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571l6.19,5.238C39.712,34.464,44,28.098,44,20C44,22.659,43.862,21.35,43.611,20.083z"></path></svg>
                     <span class="text-lg font-medium">Continuar con Google</span>
                 </button>
                 
@@ -1393,7 +1430,11 @@
                     <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight child-only" id="child-name-header">Hola!</h1>
                     <div id="total-points-header" class="text-2xl font-bold text-yellow-500 mt-1 child-only">...</div>
                 </div>
+                <!-- Botón de Salir (Admin) -->
                 <button id="btn-logout" class="hidden bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
+                
+                <!-- *** NUEVO BOTÓN: Salir a Admin (Hijo) *** -->
+                <button id="btn-exit-child-mode" class="child-only text-3xl p-2 rounded-full hover:bg-gray-200 hidden">🔒</button>
             </header>
 
             <!-- Panel de Selección de Hijo (Admin) -->
@@ -1567,8 +1608,8 @@
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Tarea (para el hijo sel.)</h2>
                 <form id="form-add-task" class="space-y-3">
-                    <input type="text" id="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
-                    <input type="number" id="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
+                    <input type="text" id="task-name" name="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="task-points" name="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
                     <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Guardar</button>
                 </form>
                 
@@ -1601,8 +1642,8 @@
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Nueva Recompensa (Global)</h2>
                 <form id="form-add-reward" class="space-y-3">
-                    <input type="text" id="reward-name" placeholder="Nombre del premio" class="w-full p-3 border rounded-lg" required>
-                    <input type="number" id="reward-cost" placeholder="Costo" class="w-full p-3 border rounded-lg" required>
+                    <input type="text" id="reward-name" name="reward-name" placeholder="Nombre del premio" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="reward-cost" name="reward-cost" placeholder="Costo" class="w-full p-3 border rounded-lg" required>
                     <button type="submit" class="w-full bg-purple-500 text-white p-3 rounded-lg font-bold">Añadir</button>
                 </form>
 
@@ -1653,8 +1694,8 @@
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Penalidad (Global)</h2>
                 <form id="form-add-penalty" class="space-y-3">
-                    <input type="text" id="penalty-name" placeholder="Nombre de la penalidad" class="w-full p-3 border rounded-lg" required>
-                    <input type="number" id="penalty-points" placeholder="Puntos (ej: 150)" class="w-full p-3 border rounded-lg" required>
+                    <input type="text" id="penalty-name" name="penalty-name" placeholder="Nombre de la penalidad" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="penalty-points" name="penalty-points" placeholder="Puntos (ej: 150)" class="w-full p-3 border rounded-lg" required>
                     <button type="submit" class="w-full bg-red-500 text-white p-3 rounded-lg font-bold">Guardar</button>
                 </form>
                 
@@ -1678,4 +1719,3 @@
     </div>
 </body>
 </html>
-
