@@ -41,14 +41,15 @@
 
         // --- Configuración de Firebase ---
         // ¡¡IMPORTANTE!! DEBES PONER AQUÍ LAS LLAVES DE TU *NUEVO* PROYECTO DE FIREBASE
-        const firebaseConfig = typeof __firebase_config !== 'undefined' 
-            ? JSON.parse(__firebase_config) 
-            : { 
-                apiKey: "TU_NUEVA_API_KEY",   
-                authDomain: "TU_NUEVO_AUTH_DOMAIN",   
-                projectId: "TU_NUEVO_PROJECT_ID",   
-                // ...etc
-              };
+        const firebaseConfig = {
+  apiKey: "AIzaSyDBzsAiJQ6ktFWUxYSpWDXsWdBwMoW3bNo",
+  authDomain: "app-recompensas-familias.firebaseapp.com",
+  projectId: "app-recompensas-familias",
+  storageBucket: "app-recompensas-familias.firebasestorage.app",
+  messagingSenderId: "680945319622",
+  appId: "1:680945319622:web:782abbf670e7899b1961c7",
+  measurementId: "G-EPPYQC4FGQ"
+};
         
         // --- CÓDIGO PIN (para cambiar de modo hijo a admin) ---
         const ADMIN_PIN = '0000'; 
@@ -1647,4 +1648,5 @@
 
     </div>
 </body>
+
 </html>
