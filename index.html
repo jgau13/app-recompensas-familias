@@ -56,13 +56,22 @@
         // --- CÓDIGO PIN (Admin) ---
         const ADMIN_PIN = '0000'; // PIN para salir del modo hijo
 
+        // *** NUEVA FUNCIÓN HELPER ***
+        function getLocalDateString() {
+            const date = new Date();
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0'); // Meses son 0-11
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`; // Retorna "YYYY-MM-DD"
+        }
+
         // --- Inicialización ---
         let app, db, auth, provider;
         let currentUserId = null; // ID del Papá/Mamá (Admin)
         
         // --- Referencias Dinámicas (por familia) ---
         let familyDocRef; // Documento de la familia (para 'lastReset')
-        let childrenRef, tasksRef, pendingTasksRef, rewardsRef, penaltiesRef, pointsHistoryRef, redeemedRewardsRef;
+        let childrenRef, tasksRef, pendingTasksRef, rewardsRef, penaltiesRef, pointsHistoryRef, redeemedRewardsRef, tasksCooldownRef;
 
         // --- Estado Local ---
         let localUserMode = 'unknown'; // 'unknown', 'child', 'admin'
@@ -72,6 +81,7 @@
         let localChildren = [];
         let localTasks = [];
         let localPendingTasks = [];
+        let localTasksCooldown = []; // <-- NUEVO: Tareas en cooldown
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
@@ -96,6 +106,7 @@
         let childrenListener = null;
         let tasksListener = null;
         let pendingTasksListener = null;
+        let tasksCooldownListener = null; // <-- NUEVO
         let rewardsListener = null;
         let penaltiesListener = null;
         let pointsHistoryListener = null;
@@ -452,7 +463,7 @@
         // --- Lógica de Reinicio Diario ---
         async function checkDailyReset() {
             if (!familyDocRef) return;
-            const today = new Date().toISOString().split('T')[0];
+            const today = getLocalDateString(); // <-- MODIFICADO (Usa hora local)
             
             if (localLastReset && localLastReset !== today) {
                 console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
@@ -467,6 +478,14 @@
                         const pendingSnapshot = await getDocs(childPendingTasksQuery);
                         pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
                     }
+
+                    // *** NUEVO: Limpiar TAREAS EN COOLDOWN del día anterior ***
+                    // (Aunque el listener ya no las leerá, es bueno limpiar la DB)
+                    const yesterdayStr = localLastReset; // El localLastReset *es* la fecha de ayer
+                    const cooldownQuery = query(tasksCooldownRef, where("date", "==", yesterdayStr));
+                    const cooldownSnapshot = await getDocs(cooldownQuery);
+                    cooldownSnapshot.docs.forEach(d => batch.delete(d.ref));
+                    // *** FIN NUEVO ***
                     
                     batch.set(familyDocRef, { lastReset: today }, { merge: true });
                     await batch.commit();
@@ -488,6 +507,7 @@
             localChildren = [];
             localTasks = [];
             localPendingTasks = [];
+            localTasksCooldown = []; // <-- NUEVO
             localRewards = [];
             localPenalties = [];
             localPointsHistory = [];
@@ -512,14 +532,17 @@
             localTasks = [];
             localPendingTasks = [];
             localPointsHistory = [];
+            localTasksCooldown = []; // <-- NUEVO
             
             // Limpia listeners de hijo
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
+            if(tasksCooldownListener) tasksCooldownListener(); // <-- NUEVO
             tasksListener = null;
             pendingTasksListener = null;
             pointsHistoryListener = null;
+            tasksCooldownListener = null; // <-- NUEVO
 
             // Limpia las vistas
             renderTasksList();
@@ -645,8 +668,20 @@
             }
             localTasks.sort((a, b) => a.name.localeCompare(b.name));
 
+            let tasksRendered = 0; // <-- Contador
+
             localTasks.forEach(task => {
+                // *** LÓGICA DE RENDERIZADO MODIFICADA ***
                 const isPending = localPendingTasks.some(pt => pt.taskId === task.id);
+                const isOnCooldown = localTasksCooldown.some(ct => ct.taskId === task.id);
+
+                // Si la tarea ya fue aprobada hoy (en cooldown), no la mostramos.
+                if (isOnCooldown) {
+                    return; // No renderizar esta tarea
+                }
+
+                tasksRendered++; // <-- Aumentar contador
+
                 const taskEl = document.createElement('div');
                 taskEl.className = `p-4 rounded-lg shadow flex justify-between items-center ${isPending ? 'bg-gray-200' : 'bg-white'}`;
                 taskEl.innerHTML = `
@@ -667,6 +702,12 @@
                 }
                 containers.tasksList.appendChild(taskEl);
             });
+
+            // *** AÑADIDO: Mensaje si todas las tareas están en cooldown ***
+            if (localTasks.length > 0 && tasksRendered === 0) {
+                 containers.tasksList.innerHTML = '<p class="text-gray-500 text-center">¡Genial! Ya completaste todas tus tareas de hoy.</p>';
+                 return;
+            }
         }
         
         function renderPendingTasksList() {
@@ -1125,7 +1166,7 @@
             try { 
                 // *** 2ª CORRECCIÓN APLICADA AQUÍ ***
                 await addDoc(pendingTasksRef, { 
-                    taskId, 
+                    taskId, // <-- TaskID es crucial
                     name, 
                     points, 
                     requestedAt: serverTimestamp(),
@@ -1136,16 +1177,34 @@
             finally { showLoading(false); }
         }
         
-        async function handleApproveTask(id, name, points) {
-            if (!currentChildId || !pendingTasksRef || !childrenRef) return;
+        async function handleApproveTask(id, name, points) { // id = pendingTaskDocId
+            if (!currentChildId || !pendingTasksRef || !childrenRef || !tasksCooldownRef) return;
             showLoading(true);
             try {
                 const newTotal = (localTotalPoints || 0) + points;
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
+                // *** LÓGICA DE COOLDOWN ***
+                const pendingTask = localPendingTasks.find(pt => pt.id === id); // Busca la tarea pendiente
+                if (!pendingTask) {
+                    console.error("No se encontró la tarea pendiente para aprobar:", id);
+                    showLoading(false);
+                    return;
+                }
+                
                 const batch = writeBatch(db);
                 batch.update(childDocRef, { totalPoints: newTotal });
-                batch.delete(doc(db, pendingTasksRef.path, id));
+                batch.delete(doc(db, pendingTasksRef.path, id)); // Borra de pendientes
+                
+                // Añade la tarea al "cooldown" de hoy
+                const cooldownDocRef = doc(tasksCooldownRef); // Crea un ID aleatorio
+                batch.set(cooldownDocRef, {
+                    childId: currentChildId,
+                    taskId: pendingTask.taskId, // Usa el ID de la tarea original
+                    date: getLocalDateString() // Sello de hoy (local)
+                });
+                // *** FIN DE LÓGICA DE COOLDOWN ***
+
                 await batch.commit();
 
                 // Añadir al historial
@@ -1222,6 +1281,7 @@
             // Las tareas y pendientes también son globales de la familia
             tasksRef = collection(db, familyDocRef.path, 'tasks');
             pendingTasksRef = collection(db, familyDocRef.path, 'pendingTasks');
+            tasksCooldownRef = collection(db, familyDocRef.path, 'tasksCooldown'); // <-- NUEVO
         }
 
         // Rutas que dependen del hijo seleccionado (YA NO ES NECESARIO)
@@ -1251,8 +1311,9 @@
                 if (doc.exists()) {
                     localLastReset = doc.data().lastReset || null;
                 } else { 
-                    setDoc(familyDocRef, { adminId: currentUserId, lastReset: new Date().toISOString().split('T')[0] });
-                    localLastReset = new Date().toISOString().split('T')[0];
+                    const todayStr = getLocalDateString(); // <-- MODIFICADO (Usa hora local)
+                    setDoc(familyDocRef, { adminId: currentUserId, lastReset: todayStr });
+                    localLastReset = todayStr;
                 }
                 
                 // Solo chequear reseteo si ya cargaron los hijos
@@ -1310,11 +1371,12 @@
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
-            
+            if(tasksCooldownListener) tasksCooldownListener(); // <-- NUEVO
+
             console.log('setupChildFirestoreListeners: Configurando listeners para childId:', currentChildId); // <-- LOG AÑADIDO
 
-            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef) {
-                console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS, no se configuran listeners.', { currentChildId, tasksRef, pendingTasksRef, pointsHistoryRef });
+            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef || !tasksCooldownRef) { // <-- NUEVO
+                console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS, no se configuran listeners.', { currentChildId, tasksRef, pendingTasksRef, pointsHistoryRef, tasksCooldownRef });
                 return;
             }
 
@@ -1344,6 +1406,18 @@
                 console.error("Error en listener de pointsHistoryRef:", error);
                 // Si da error de índice, puedes quitar el orderBy y ordenar en cliente
             });
+
+            // *** NUEVO LISTENER: Tareas en Cooldown (completadas hoy) ***
+            const todayStr = getLocalDateString();
+            const cooldownQuery = query(tasksCooldownRef, 
+                                    where("childId", "==", currentChildId), 
+                                    where("date", "==", todayStr)
+                                  );
+            tasksCooldownListener = onSnapshot(cooldownQuery, (s) => {
+                console.log('tasksCooldownListener: Tareas en cooldown recibidas:', s.docs.length);
+                localTasksCooldown = s.docs.map(d => d.data());
+                renderTasksList(); // Actualiza la lista de tareas para ocultar las completadas
+            }, (error) => console.error("Error GRAVE en tasksCooldownListener:", error));
         }
 
     </script>
