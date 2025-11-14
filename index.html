@@ -1,0 +1,1650 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App de Recompensas (Multi-Familia)</title>
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Carga de Firebase -->
+    <script type="module">
+        // Importaciones de Firebase (Auth y Firestore)
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signInWithPopup,
+            GoogleAuthProvider,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            collection, 
+            doc, 
+            addDoc, 
+            setDoc, 
+            getDoc,
+            updateDoc,
+            deleteDoc,
+            onSnapshot,
+            query,
+            where,
+            getDocs,
+            Timestamp,
+            writeBatch,
+            serverTimestamp,
+            orderBy,
+            limit
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Configuración de Firebase ---
+        // ¡¡IMPORTANTE!! DEBES PONER AQUÍ LAS LLAVES DE TU *NUEVO* PROYECTO DE FIREBASE
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : { 
+                apiKey: "TU_NUEVA_API_KEY",   
+                authDomain: "TU_NUEVO_AUTH_DOMAIN",   
+                projectId: "TU_NUEVO_PROJECT_ID",   
+                // ...etc
+              };
+        
+        // --- CÓDIGO PIN (para cambiar de modo hijo a admin) ---
+        const ADMIN_PIN = '0000'; 
+
+        // --- Inicialización ---
+        let app, db, auth, googleProvider;
+        let currentUserId = null; // UID del papá/mamá logueado
+        
+        // --- Referencias Dinámicas ---
+        let dataDocRef; // Documento 'data' que contiene las colecciones
+        let globalProfileRef, globalRewardsRef, globalPenaltiesRef, childrenRef, globalRedeemedRef, globalPointsHistoryRef;
+        let childTasksRef, childPendingTasksRef; 
+
+        // --- Estado Local ---
+        let localUserMode = 'unknown'; // 'unknown', 'child', 'admin'
+        let currentChildId = null; // ID del hijo seleccionado
+        let currentChildName = ""; 
+        
+        let localChildren = [];
+        let localTasks = [];
+        let localPendingTasks = [];
+        let localRewards = [];
+        let localPenalties = [];
+        let localPointsHistory = [];
+        let localTotalPoints = 0;
+        let localLastReset = null;
+
+        let currentEditingTaskId = null;
+        let currentEditingPenaltyId = null;
+        let currentEditingRewardId = null; 
+        let currentEditingChildId = null; 
+        let hasInitialDataLoaded = false; 
+        
+        // --- Listeners de DB (para poder limpiarlos) ---
+        let childrenListener = null;
+        let globalRewardsListener = null;
+        let globalPenaltiesListener = null;
+        let globalProfileListener = null;
+        let tasksListener = null;
+        let pendingTasksListener = null;
+        let historyListener = null;
+
+        // --- Elementos del DOM ---
+        let pages = {};
+        let buttons = {};
+        let containers = {};
+        let forms = {};
+        let elements = {};
+        let selects = {};
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            cacheDOMElements();
+            setupUIListeners();
+            showPage('page-loading'); // Empezar en loading
+
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                googleProvider = new GoogleAuthProvider();
+
+                setupAuthListener(); // El listener decide qué página mostrar
+
+            } catch (error) {
+                console.error("Error crítico en la inicialización:", error);
+                showPage('page-login'); 
+                elements.loginError.textContent = "Error al conectar con Firebase.";
+                elements.loginError.classList.remove('hidden');
+            }
+        });
+
+        function cacheDOMElements() {
+            pages = {
+                'page-loading': document.getElementById('page-loading'),
+                'page-login': document.getElementById('page-login'),
+                'page-pin-modal': document.getElementById('page-pin-modal'),
+                'page-main': document.getElementById('page-main'),
+                'page-tasks': document.getElementById('page-tasks'),
+                'page-points': document.getElementById('page-points'),
+                'page-evaluate': document.getElementById('page-evaluate'),
+                'page-redeem': document.getElementById('page-redeem'),
+                'page-redeemed-list': document.getElementById('page-redeemed-list'),
+                'page-penalties': document.getElementById('page-penalties'),
+                'page-manage-children': document.getElementById('page-manage-children'),
+                'page-manage-tasks': document.getElementById('page-manage-tasks')
+            };
+            
+            buttons = {
+                'btn-login-google': document.getElementById('btn-login-google'),
+                'btn-show-email-login': document.getElementById('btn-show-email-login'),
+                'btn-show-email-register': document.getElementById('btn-show-email-register'),
+                'btn-pin-cancel': document.getElementById('btn-pin-cancel'),
+                'btn-pin-submit': document.getElementById('btn-pin-submit'),
+                'btn-admin-logout': document.getElementById('btn-admin-logout'),
+                'btn-child-logout': document.getElementById('btn-child-logout'),
+                
+                'btn-tasks': document.getElementById('btn-tasks'),
+                'btn-points': document.getElementById('btn-points'),
+                'btn-evaluate': document.getElementById('btn-evaluate'),
+                'btn-redeem': document.getElementById('btn-redeem'),
+                'btn-redeemed-list': document.getElementById('btn-redeemed-list'),
+                'btn-penalties': document.getElementById('btn-penalties'),
+                'btn-manage-children': document.getElementById('btn-manage-children'),
+                'btn-manage-tasks': document.getElementById('btn-manage-tasks'),
+                back: document.querySelectorAll('.btn-back')
+            };
+
+            containers = {
+                childLoginList: document.getElementById('child-login-list'),
+                tasksList: document.getElementById('tasks-list-container'),
+                pendingTasksList: document.getElementById('pending-tasks-list-container'),
+                activeTasksEditList: document.getElementById('active-tasks-edit-list-container'),
+                rewardsList: document.getElementById('rewards-list-container'),
+                rewardsEditList: document.getElementById('rewards-edit-list-container'), 
+                redeemedRewardsList: document.getElementById('redeemed-rewards-list-container'),
+                penaltiesApplyList: document.getElementById('penalties-apply-list-container'),
+                penaltiesEditList: document.getElementById('penalties-edit-list-container'),
+                childrenEditList: document.getElementById('children-edit-list-container'),
+                pointsHistoryList: document.getElementById('points-history-list')
+            };
+
+            forms = {
+                'form-email-login': document.getElementById('form-email-login'),
+                'form-email-register': document.getElementById('form-email-register'),
+                'form-pin': document.getElementById('form-pin'),
+                'form-add-child': document.getElementById('form-add-child'),
+                'form-edit-child': document.getElementById('form-edit-child'),
+                'form-add-task': document.getElementById('form-add-task'),
+                'form-edit-task': document.getElementById('form-edit-task'),
+                'form-add-reward': document.getElementById('form-add-reward'),
+                'form-edit-reward': document.getElementById('form-edit-reward'), 
+                'form-add-penalty': document.getElementById('form-add-penalty'),
+                'form-edit-penalty': document.getElementById('form-edit-penalty')
+            };
+
+            elements = {
+                loginError: document.getElementById('login-error'),
+                registerError: document.getElementById('register-error'),
+                emailRegisterForm: document.getElementById('email-register-form'),
+                emailLoginForm: document.getElementById('email-login-form'),
+                
+                totalPointsDisplay: document.getElementById('total-points-display'),
+                totalPointsHeader: document.getElementById('total-points-header'),
+                childNameHeader: document.getElementById('child-name-header'),
+                adminNameHeader: document.getElementById('admin-name-header'),
+                
+                loading: document.getElementById('loading-overlay'),
+                pinInput: document.getElementById('pin-input'),
+                pinError: document.getElementById('pin-error'),
+                
+                editChildName: document.getElementById('edit-child-name'),
+                editChildGender: document.getElementById('edit-child-gender'),
+                editChildCancel: document.getElementById('btn-edit-child-cancel'),
+                
+                editTaskName: document.getElementById('edit-task-name'),
+                editTaskPoints: document.getElementById('edit-task-points'),
+                editTaskCancel: document.getElementById('btn-edit-task-cancel'),
+                
+                editPenaltyName: document.getElementById('edit-penalty-name'),
+                editPenaltyPoints: document.getElementById('edit-penalty-points'),
+                editPenaltyCancel: document.getElementById('btn-edit-penalty-cancel'),
+                
+                editRewardName: document.getElementById('edit-reward-name'), 
+                editRewardCost: document.getElementById('edit-reward-cost'), 
+                editRewardCancel: document.getElementById('btn-edit-reward-cancel') 
+            };
+
+            selects = {
+                'child-select-evaluate': document.getElementById('child-select-evaluate'),
+                'child-select-penalties': document.getElementById('child-select-penalties'),
+                'child-select-tasks': document.getElementById('child-select-tasks')
+            };
+        }
+
+        // --- LÓGICA DE AUTENTICACIÓN ---
+
+        // Listener principal de Auth. Decide si mostrar login o la app.
+        function setupAuthListener() {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    // Hay un papá/mamá logueado
+                    currentUserId = user.uid;
+                    setupGlobalFirestoreReferences(currentUserId); 
+                    setupGlobalFirestoreListeners();
+                    
+                    // Revisa si está en modo hijo o admin
+                    checkCachedMode(user);
+                } else {
+                    // Nadie logueado
+                    currentUserId = null;
+                    clearAllListeners(); // Limpia listeners de DB
+                    showPage('page-login');
+                }
+                showLoading(false);
+            });
+        }
+
+        function setupUIListeners() {
+            // Login
+            buttons['btn-login-google'].addEventListener('click', handleGoogleLogin);
+            buttons['btn-show-email-login'].addEventListener('click', () => {
+                elements.emailLoginForm.classList.toggle('hidden');
+                elements.emailRegisterForm.classList.add('hidden');
+            });
+            buttons['btn-show-email-register'].addEventListener('click', () => {
+                elements.emailRegisterForm.classList.toggle('hidden');
+                elements.emailLoginForm.classList.add('hidden');
+            });
+            forms['form-email-login'].addEventListener('submit', handleEmailLogin);
+            forms['form-email-register'].addEventListener('submit', handleEmailRegister);
+            
+            // PIN (para salir de modo hijo)
+            forms['form-pin'].addEventListener('submit', handlePinSubmit);
+            buttons['btn-pin-cancel'].addEventListener('click', () => {
+                elements.pinInput.value = '';
+                elements.pinError.classList.add('hidden');
+                showPage('page-main'); // Regresa a la página principal (modo hijo)
+            });
+            
+            // Logout
+            buttons['btn-admin-logout'].addEventListener('click', handleLogout);
+            buttons['btn-child-logout'].addEventListener('click', () => {
+                // Esto no desloguea, solo pide PIN para volver a modo admin
+                showPage('page-pin-modal');
+            });
+            
+            // Navegación principal
+            buttons['btn-tasks'].addEventListener('click', () => showPage('page-tasks'));
+            buttons['btn-points'].addEventListener('click', () => showPage('page-points'));
+            buttons['btn-evaluate'].addEventListener('click', () => showPage('page-evaluate'));
+            buttons['btn-redeem'].addEventListener('click', () => showPage('page-redeem'));
+            buttons['btn-redeemed-list'].addEventListener('click', () => showPage('page-redeemed-list'));
+            buttons['btn-penalties'].addEventListener('click', () => showPage('page-penalties'));
+            buttons['btn-manage-children'].addEventListener('click', () => showPage('page-manage-children'));
+            buttons['btn-manage-tasks'].addEventListener('click', () => showPage('page-manage-tasks'));
+            
+            buttons.back.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Limpia los selects de admin al volver al menú
+                    if (localUserMode === 'admin') {
+                        clearAdminSelects();
+                    }
+                    showPage('page-main');
+                });
+            });
+
+            // Forms Admin - Gestión de Hijos
+            forms['form-add-child'].addEventListener('submit', handleAddChild);
+            forms['form-edit-child'].addEventListener('submit', handleEditChildSubmit);
+            elements.editChildCancel.addEventListener('click', cancelEditChild);
+            
+            // Forms Admin - Gestión de Tareas (depende del select)
+            forms['form-add-task'].addEventListener('submit', handleAddTask);
+            forms['form-edit-task'].addEventListener('submit', handleEditTaskSubmit);
+            elements.editTaskCancel.addEventListener('click', cancelEditTask);
+
+            // Forms Admin - Gestión Global (para esta familia)
+            forms['form-add-reward'].addEventListener('submit', handleAddReward);
+            forms['form-edit-reward'].addEventListener('submit', handleEditRewardSubmit); 
+            elements.editRewardCancel.addEventListener('click', cancelEditReward); 
+            forms['form-add-penalty'].addEventListener('submit', handleAddPenalty);
+            forms['form-edit-penalty'].addEventListener('submit', handleEditPenaltySubmit);
+            elements.editPenaltyCancel.addEventListener('click', cancelEditPenalty);
+
+            // Selects de Admin
+            selects['child-select-evaluate'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'evaluate'));
+            selects['child-select-penalties'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'penalties'));
+            selects['child-select-tasks'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'tasks'));
+        }
+
+        async function handleGoogleLogin() {
+            showLoading(true);
+            try {
+                await signInWithPopup(auth, googleProvider);
+                // El auth listener se encargará de redirigir
+            } catch (error) {
+                console.error("Error con Google:", error);
+                elements.loginError.textContent = `Error: ${error.message}`;
+                elements.loginError.classList.remove('hidden');
+                showLoading(false);
+            }
+        }
+        
+        async function handleEmailLogin(e) {
+            e.preventDefault();
+            showLoading(true);
+            const email = e.target.email.value;
+            const password = e.target.password.value;
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                console.error("Error de login:", error);
+                elements.loginError.textContent = `Error: ${error.message}`;
+                elements.loginError.classList.remove('hidden');
+                showLoading(false);
+            }
+        }
+
+        async function handleEmailRegister(e) {
+            e.preventDefault();
+            showLoading(true);
+            const email = e.target.email.value;
+            const password = e.target.password.value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                console.error("Error de registro:", error);
+                elements.registerError.textContent = `Error: ${error.message}`;
+                elements.registerError.classList.remove('hidden');
+                showLoading(false);
+            }
+        }
+        
+        async function handleLogout() {
+            showLoading(true);
+            localStorage.removeItem('appMode');
+            localStorage.removeItem('currentChildId');
+            clearChildContext();
+            await signOut(auth);
+            // El auth listener se encargará de mostrar el login
+        }
+
+        // --- DEFINICIÓN DE RUTAS DE FIREBASE ---
+
+        function setupGlobalFirestoreReferences(uid) {
+            if (!uid) return;
+            // Ruta privada para la familia logueada
+            const familyDataPath = `/familias/${uid}`;
+            
+            dataDocRef = doc(db, familyDataPath, 'data');
+            
+            globalProfileRef = dataDocRef; 
+            
+            childrenRef = collection(db, dataDocRef.path, 'children');
+            globalRewardsRef = collection(db, dataDocRef.path, 'rewards');
+            globalPenaltiesRef = collection(db, dataDocRef.path, 'penalties');
+            globalRedeemedRef = collection(db, dataDocRef.path, 'redeemedRewards');
+            globalPointsHistoryRef = collection(db, dataDocRef.path, 'pointsHistory');
+        }
+
+        function setupChildFirestoreReferences(childId) {
+            if (!childId || !childrenRef) {
+                childTasksRef = null;
+                childPendingTasksRef = null;
+                return;
+            }
+            const childDocPath = doc(db, childrenRef.path, childId);
+            childTasksRef = collection(childDocPath, 'tasks');
+            childPendingTasksRef = collection(childDocPath, 'pendingTasks');
+        }
+        
+        function clearAllListeners() {
+            if(globalProfileListener) globalProfileListener();
+            if(childrenListener) childrenListener();
+            if(globalRewardsListener) globalRewardsListener();
+            if(globalPenaltiesListener) globalPenaltiesListener();
+            clearChildContext(); // Limpia los listeners de hijo
+        }
+
+        // --- Lógica de Modo/Login ---
+        
+        function checkCachedMode(user) {
+            const mode = localStorage.getItem('appMode');
+            const childId = localStorage.getItem('currentChildId');
+            
+            // Espera a que los hijos se carguen antes de decidir
+            // (El listener de hijos ahora está en setupGlobalFirestoreListeners)
+            if (mode === 'admin') {
+                setAdminMode(user);
+            } else if (mode === 'child' && childId) {
+                // Intenta loguear como hijo, pero necesita la lista de hijos
+                // El listener de 'childrenRef' se encargará de esto
+                // Si el hijo no existe, se deslogueará
+            } else {
+                // Por defecto, entra como admin
+                setAdminMode(user);
+            }
+        }
+
+        function setAdminMode(user) {
+            localUserMode = 'admin';
+            localStorage.setItem('appMode', 'admin');
+            localStorage.removeItem('currentChildId');
+            clearChildContext();
+            updateAdminUI('admin');
+            populateAdminSelects();
+            elements.adminNameHeader.textContent = `Admin: ${user.email || 'Cuenta de Google'}`;
+            showPage('page-main');
+        }
+
+        function setChildMode(childId, childName, points, gender) {
+            localUserMode = 'child';
+            currentChildId = childId;
+            currentChildName = childName;
+            localTotalPoints = points;
+            
+            localStorage.setItem('appMode', 'child');
+            localStorage.setItem('currentChildId', childId);
+            
+            setupChildFirestoreReferences(childId);
+            setupChildFirestoreListeners();
+            updateAdminUI('child');
+            updatePointsDisplay();
+            
+            const genderEmoji = gender === 'boy' ? '👦' : '👧';
+            elements.childNameHeader.textContent = `Hola, ${childName}! ${genderEmoji}`;
+            showPage('page-main');
+        }
+
+        function clearChildContext() {
+            currentChildId = null;
+            currentChildName = "";
+            localTotalPoints = 0;
+            localTasks = [];
+            localPendingTasks = [];
+            localPointsHistory = [];
+            
+            if(tasksListener) tasksListener();
+            if(pendingTasksListener) pendingTasksListener();
+            if(historyListener) historyListener();
+            tasksListener = null;
+            pendingTasksListener = null;
+            historyListener = null;
+
+            renderTasksList();
+            renderPendingTasksList();
+            renderPointsHistory();
+            renderActiveTasksEditList();
+        }
+        
+        function clearAdminSelects() {
+             Object.values(selects).forEach(select => {
+                if (select) select.value = "";
+             });
+             clearChildContext(); 
+        }
+        
+        function handlePinSubmit(e) {
+            e.preventDefault();
+            const pin = elements.pinInput.value;
+            if (pin === ADMIN_PIN) {
+                elements.pinInput.value = '';
+                elements.pinError.classList.add('hidden');
+                // Salir de modo hijo y volver a modo admin
+                setAdminMode(auth.currentUser);
+            } else {
+                elements.pinError.classList.remove('hidden');
+            }
+        }
+
+        function updateAdminUI(mode) {
+            const adminElements = document.querySelectorAll('.admin-only');
+            const childElements = document.querySelectorAll('.child-only');
+            
+            if (mode === 'child') {
+                adminElements.forEach(el => el.classList.add('hidden'));
+                childElements.forEach(el => el.classList.remove('hidden'));
+            } else if (mode === 'admin') {
+                adminElements.forEach(el => el.classList.remove('hidden'));
+                childElements.forEach(el => el.classList.add('hidden'));
+            } else {
+                adminElements.forEach(el => el.classList.add('hidden'));
+                childElements.forEach(el => el.classList.add('hidden'));
+            }
+        }
+
+        function showPage(pageId) {
+            if (pages[pageId]) {
+                 Object.values(pages).forEach(page => {
+                    if (page) page.classList.add('hidden');
+                });
+                pages[pageId].classList.remove('hidden');
+            } else {
+                console.warn(`Página no encontrada: ${pageId}`);
+            }
+        }
+
+        function showLoading(isLoading) {
+            if (elements.loading) {
+                if (isLoading) elements.loading.classList.remove('hidden');
+                else elements.loading.classList.add('hidden');
+            }
+        }
+
+        // --- Lógica de Reinicio Diario ---
+        async function checkDailyReset() {
+            const today = new Date().toISOString().split('T')[0];
+            if (localLastReset && localLastReset !== today) {
+                console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
+                showLoading(true);
+                try {
+                    const batch = writeBatch(db);
+                    
+                    for (const child of localChildren) {
+                        const childPendingTasksPath = collection(db, childrenRef.path, child.id, 'pendingTasks');
+                        const pendingSnapshot = await getDocs(childPendingTasksPath);
+                        pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
+                    }
+                    
+                    batch.set(globalProfileRef, { lastReset: today }, { merge: true });
+                    await batch.commit();
+                    localLastReset = today; 
+                } catch (err) {
+                    console.error("Error durante el reseteo diario:", err);
+                } finally {
+                    showLoading(false);
+                }
+            } else if (!localLastReset) {
+                console.log("Estableciendo fecha de reseteo inicial.");
+                await setDoc(globalProfileRef, { lastReset: today }, { merge: true });
+                localLastReset = today;
+            }
+        }
+
+        // --- Lógica de Admin ---
+        function populateAdminSelects() {
+            const selectsToPopulate = [
+                selects['child-select-evaluate'],
+                selects['child-select-penalties'],
+                selects['child-select-tasks']
+            ];
+            
+            selectsToPopulate.forEach(select => {
+                if (!select) return;
+                select.innerHTML = '<option value="">Selecciona un hijo...</option>'; 
+                localChildren.forEach(child => {
+                    const option = document.createElement('option');
+                    option.value = child.id;
+                    option.textContent = child.name;
+                    select.appendChild(option);
+                });
+            });
+        }
+
+        function setupAdminPageContext(childId, pageKey) {
+            clearChildContext(); 
+            
+            if (!childId) {
+                return; 
+            }
+            const child = localChildren.find(c => c.id === childId);
+            if (!child) return;
+
+            currentChildId = childId;
+            currentChildName = child.name;
+            localTotalPoints = child.totalPoints;
+
+            setupChildFirestoreReferences(childId);
+            setupChildFirestoreListeners(); 
+        }
+
+
+        // --- Renderizado ---
+        function renderChildLoginList() {
+            if (!containers.childLoginList) return;
+            containers.childLoginList.innerHTML = '';
+            localChildren.sort((a,b) => a.name.localeCompare(b.name));
+            
+            localChildren.forEach(child => {
+                const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
+                const btn = document.createElement('button');
+                btn.className = "w-full bg-green-500 text-white p-6 rounded-2xl shadow-lg flex flex-col items-center gap-2 hover:bg-green-600 transition-colors";
+                btn.innerHTML = `
+                    <span class="text-5xl">${genderEmoji}</span>
+                    <span class="text-2xl font-bold">${child.name}</span>
+                `;
+                btn.addEventListener('click', () => setChildMode(child.id, child.name, child.totalPoints, child.gender));
+                containers.childLoginList.appendChild(btn);
+            });
+        }
+
+        function renderChildrenEditList() {
+            if (!containers.childrenEditList) return;
+            containers.childrenEditList.innerHTML = '';
+            localChildren.forEach(child => {
+                const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
+                const el = document.createElement('div');
+                el.className = 'bg-white p-3 rounded-lg shadow flex justify-between items-center border border-gray-200';
+                el.innerHTML = `
+                    <span class="font-semibold text-gray-800">${genderEmoji} ${child.name}</span>
+                    <div class="flex gap-1">
+                        <button class="btn-edit-child text-xl p-2 rounded-full hover:bg-blue-100" data-id="${child.id}">✏️</button>
+                        <button class="btn-delete-child text-xl p-2 rounded-full hover:bg-red-100" data-id="${child.id}">🗑️</button>
+                    </div>
+                `;
+                el.querySelector('.btn-edit-child').addEventListener('click', () => startEditChild(child.id, child.name, child.gender));
+                el.querySelector('.btn-delete-child').addEventListener('click', () => handleDeleteChild(child.id, child.name));
+                containers.childrenEditList.appendChild(el);
+            });
+        }
+
+        function renderTasksList() {
+            if (!containers.tasksList) return;
+            containers.tasksList.innerHTML = '';
+            if (!currentChildId) return; 
+            
+            if (localTasks.length === 0) {
+                containers.tasksList.innerHTML = '<p class="text-gray-500 text-center">No hay tareas asignadas.</p>';
+                return;
+            }
+            localTasks.sort((a, b) => a.name.localeCompare(b.name));
+
+            localTasks.forEach(task => {
+                const isPending = localPendingTasks.some(pt => pt.taskId === task.id);
+                const taskEl = document.createElement('div');
+                taskEl.className = `p-4 rounded-lg shadow flex justify-between items-center ${isPending ? 'bg-gray-200' : 'bg-white'}`;
+                taskEl.innerHTML = `
+                    <div>
+                        <span class="font-semibold text-lg ${isPending ? 'text-gray-500 line-through' : 'text-gray-800'}">${task.name}</span>
+                        <span class="text-sm ${isPending ? 'text-gray-400' : 'text-gray-500'}">(${task.points} pts)</span>
+                    </div>
+                    <button class="btn-complete-task text-3xl p-2 rounded-full transition-transform duration-200 ${isPending ? 'opacity-50 cursor-not-allowed' : 'hover:scale-125'}" data-id="${task.id}" ${isPending ? 'disabled' : ''}>
+                        ${isPending ? '⏳' : '✅'}
+                    </button>
+                `;
+                if (!isPending) {
+                    taskEl.querySelector('.btn-complete-task').addEventListener('click', (e) => {
+                        e.currentTarget.disabled = true;
+                        e.currentTarget.innerHTML = '⏳';
+                        handleCompleteTask(task.id, task.name, task.points);
+                    });
+                }
+                containers.tasksList.appendChild(taskEl);
+            });
+        }
+        
+        function renderPendingTasksList() {
+            if (!containers.pendingTasksList) return;
+            containers.pendingTasksList.innerHTML = '';
+            if (!currentChildId) {
+                containers.pendingTasksList.innerHTML = '<p class="text-gray-500 text-center">Selecciona un hijo para ver sus tareas pendientes.</p>';
+                return;
+            }
+            if (localPendingTasks.length === 0) {
+                containers.pendingTasksList.innerHTML = '<p class="text-gray-500 text-center">No hay tareas pendientes.</p>';
+                return;
+            }
+            localPendingTasks.forEach(task => {
+                const taskEl = document.createElement('div');
+                taskEl.className = 'bg-white p-4 rounded-lg shadow space-y-2';
+                taskEl.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <span class="font-semibold text-lg text-gray-800">${task.name} <span class="text-sm text-gray-500">(${task.points} pts)</span></span>
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="btn-approve-task bg-green-500 text-white w-full py-2 px-4 rounded-full font-bold hover:bg-green-600 transition-colors" data-id="${task.id}" data-points="${task.points}">Aprobar</button>
+                        <button class="btn-reject-task bg-red-500 text-white w-full py-2 px-4 rounded-full font-bold hover:bg-red-600 transition-colors" data-id="${task.id}">Rechazar</button>
+                    </div>
+                `;
+                taskEl.querySelector('.btn-approve-task').addEventListener('click', (e) => handleApproveTask(task.id, task.name, parseInt(e.currentTarget.dataset.points, 10)));
+                taskEl.querySelector('.btn-reject-task').addEventListener('click', (e) => handleRejectTask(e.currentTarget.dataset.id));
+                containers.pendingTasksList.appendChild(taskEl);
+            });
+        }
+
+        function renderActiveTasksEditList() {
+            if (!containers.activeTasksEditList) return;
+            containers.activeTasksEditList.innerHTML = '';
+            if (!currentChildId) {
+                containers.activeTasksEditList.innerHTML = '<p class="text-gray-500 text-center">Selecciona un hijo para ver sus tareas.</p>';
+                return;
+            }
+            if (localTasks.length === 0) {
+                containers.activeTasksEditList.innerHTML = '<p class="text-gray-500 text-center">Este hijo no tiene tareas.</p>';
+                return;
+            }
+            const sortedTasks = [...localTasks].sort((a, b) => a.name.localeCompare(b.name));
+
+            sortedTasks.forEach(task => {
+                const taskEl = document.createElement('div');
+                taskEl.className = 'bg-white p-3 rounded-lg shadow flex justify-between items-center border border-gray-200';
+                taskEl.innerHTML = `
+                    <div class="overflow-hidden">
+                        <span class="font-semibold text-gray-800 block truncate">${task.name}</span>
+                        <span class="text-xs text-gray-500">${task.points} pts</span>
+                    </div>
+                    <div class="flex gap-1 shrink-0">
+                        <button class="btn-edit-task text-xl p-2 rounded-full hover:bg-blue-100" data-id="${task.id}">✏️</button>
+                        <button class="btn-delete-task text-xl p-2 rounded-full hover:bg-red-100" data-id="${task.id}">🗑️</button>
+                    </div>
+                `;
+                taskEl.querySelector('.btn-edit-task').addEventListener('click', () => startEditTask(task.id, task.name, task.points));
+                taskEl.querySelector('.btn-delete-task').addEventListener('click', (e) => {
+                    handleDeleteTask(e.currentTarget.dataset.id);
+                });
+                containers.activeTasksEditList.appendChild(taskEl);
+            });
+        }
+
+        function renderRewardsList() {
+            if (!containers.rewardsList) return;
+            containers.rewardsList.innerHTML = '';
+            if (localRewards.length === 0) {
+                containers.rewardsList.innerHTML = '<p class="text-gray-500 text-center">No hay recompensas.</p>';
+                return;
+            }
+            localRewards.sort((a, b) => a.cost - b.cost);
+
+            localRewards.forEach(reward => {
+                const canAfford = localTotalPoints >= reward.cost;
+                const rewardEl = document.createElement('div');
+                rewardEl.className = `p-4 rounded-lg shadow flex justify-between items-center ${canAfford ? 'bg-white' : 'bg-gray-100'}`;
+                rewardEl.innerHTML = `
+                    <div>
+                        <span class="font-semibold text-lg ${canAfford ? 'text-gray-800' : 'text-gray-500'}">${reward.name}</span>
+                        <span class="text-sm ${canAfford ? 'text-yellow-600' : 'text-gray-400'}">(${reward.cost} pts)</span>
+                    </div>
+                    <button class="btn-redeem-reward bg-purple-500 text-white py-2 px-5 rounded-full font-bold transition-colors ${canAfford ? 'hover:bg-purple-600' : 'opacity-50 cursor-not-allowed'}" data-id="${reward.id}" data-cost="${reward.cost}" data-name="${reward.name}" ${canAfford ? '' : 'disabled'}>
+                        Canjear
+                    </button>
+                `;
+                if (canAfford) {
+                    rewardEl.querySelector('.btn-redeem-reward').addEventListener('click', (e) => {
+                        handleRedeemReward(reward.id, reward.name, reward.cost);
+                    });
+                }
+                containers.rewardsList.appendChild(rewardEl);
+            });
+        }
+
+        function renderRewardsEditList() {
+            if (!containers.rewardsEditList) return;
+            containers.rewardsEditList.innerHTML = '';
+            if (localRewards.length === 0) return;
+            const sortedRewards = [...localRewards].sort((a, b) => a.name.localeCompare(b.name));
+
+            sortedRewards.forEach(reward => {
+                const rewardEl = document.createElement('div');
+                rewardEl.className = 'bg-white p-3 rounded-lg shadow flex justify-between items-center border border-gray-200';
+                rewardEl.innerHTML = `
+                    <div class="overflow-hidden">
+                        <span class="font-semibold text-gray-800 block truncate">${reward.name}</span>
+                        <span class="text-xs text-yellow-600">${reward.cost} pts</span>
+                    </div>
+                    <div class="flex gap-1 shrink-0">
+                        <button class="btn-edit-reward text-xl p-2 rounded-full hover:bg-blue-100" data-id="${reward.id}">✏️</button>
+                        <button class="btn-delete-reward text-xl p-2 rounded-full hover:bg-red-100" data-id="${reward.id}">🗑️</button>
+                    </div>
+                `;
+                rewardEl.querySelector('.btn-edit-reward').addEventListener('click', () => startEditReward(reward.id, reward.name, reward.cost));
+                rewardEl.querySelector('.btn-delete-reward').addEventListener('click', (e) => {
+                    handleDeleteReward(e.currentTarget.dataset.id);
+                });
+                containers.rewardsEditList.appendChild(rewardEl);
+            });
+        }
+
+        function renderRedeemedRewardsList() {
+            if (!containers.redeemedRewardsList) return;
+            // TODO: Implementar
+            containers.redeemedRewardsList.innerHTML = '<p class="text-gray-500 text-center">Historial de canjes...</p>';
+        }
+
+        function renderPenaltiesApplyList() {
+            if (!containers.penaltiesApplyList) return;
+            containers.penaltiesApplyList.innerHTML = '';
+            if (!currentChildId) {
+                containers.penaltiesApplyList.innerHTML = '<p class="text-gray-500 text-center">Selecciona un hijo para aplicar penalidad.</p>';
+                return;
+            }
+            if (localPenalties.length === 0) {
+                containers.penaltiesApplyList.innerHTML = '<p class="text-gray-500 text-center">No hay penalidades.</p>';
+                return;
+            }
+            localPenalties.sort((a, b) => a.name.localeCompare(b.name));
+            localPenalties.forEach(p => {
+                const el = document.createElement('div');
+                el.className = 'bg-white p-4 rounded-lg shadow flex justify-between items-center';
+                el.innerHTML = `
+                    <div>
+                        <span class="font-semibold text-lg text-gray-800">${p.name}</span>
+                        <span class="text-sm text-red-600">(${p.points} pts)</span>
+                    </div>
+                    <button class="btn-apply-penalty bg-red-500 text-white py-2 px-5 rounded-full font-bold hover:bg-red-600" data-name="${p.name}" data-points="${p.points}">
+                        Aplicar
+                    </button>
+                `;
+                el.querySelector('.btn-apply-penalty').addEventListener('click', (e) => {
+                    handleApplyPenalty(p.name, p.points);
+                });
+                containers.penaltiesApplyList.appendChild(el);
+            });
+        }
+        
+        function renderPenaltiesEditList() {
+            if (!containers.penaltiesEditList) return;
+            containers.penaltiesEditList.innerHTML = '';
+            if (localPenalties.length === 0) return;
+            localPenalties.forEach(p => {
+                const el = document.createElement('div');
+                el.className = 'bg-white p-3 rounded-lg shadow flex justify-between items-center border border-gray-200';
+                el.innerHTML = `
+                    <div>
+                        <span class="font-semibold text-gray-800">${p.name}</span>
+                        <span class="text-xs text-red-600">${p.points} pts</span>
+                    </div>
+                    <div class="flex gap-1">
+                        <button class="btn-edit-penalty text-xl p-2 rounded-full hover:bg-blue-100" data-id="${p.id}">✏️</button>
+                        <button class="btn-delete-penalty text-xl p-2 rounded-full hover:bg-red-100" data-id="${p.id}">🗑️</button>
+                    </div>
+                `;
+                el.querySelector('.btn-edit-penalty').addEventListener('click', () => startEditPenalty(p.id, p.name, p.points));
+                el.querySelector('.btn-delete-penalty').addEventListener('click', (e) => {
+                    handleDeletePenalty(e.currentTarget.dataset.id);
+                });
+                containers.penaltiesEditList.appendChild(el);
+            });
+        }
+        
+        function renderPointsHistory() {
+            if (!containers.pointsHistoryList) return;
+            containers.pointsHistoryList.innerHTML = '';
+            if (!currentChildId) return; 
+            
+            if (localPointsHistory.length === 0) {
+                 containers.pointsHistoryList.innerHTML = '<p class="text-gray-500 text-center">Aún no hay historial.</p>';
+                 return;
+            }
+            
+            localPointsHistory.forEach(item => {
+                const el = document.createElement('div');
+                const isPositive = item.points > 0;
+                el.className = `flex justify-between items-center p-3 rounded-lg ${isPositive ? 'bg-green-50' : 'bg-red-50'}`;
+                el.innerHTML = `
+                    <span class="font-medium text-gray-700">${item.reason}</span>
+                    <span class="font-bold ${isPositive ? 'text-green-600' : 'text-red-600'}">
+                        ${isPositive ? '+' : ''}${item.points} pts
+                    </span>
+                `;
+                containers.pointsHistoryList.appendChild(el);
+            });
+        }
+        
+        function updatePointsDisplay() {
+            const points = localTotalPoints || 0;
+            if (elements.totalPointsDisplay) elements.totalPointsDisplay.textContent = `${points}`;
+            if (elements.totalPointsHeader) elements.totalPointsHeader.textContent = `${points} Pts`;
+            if (pages['page-redeem'] && !pages['page-redeem'].classList.contains('hidden') && localUserMode === 'child') {
+                renderRewardsList();
+            }
+        }
+
+        // --- Lógica de Edición (Hijos) ---
+        function startEditChild(id, name, gender) {
+            currentEditingChildId = id;
+            elements.editChildName.value = name;
+            document.querySelector(`#form-edit-child input[name="edit-gender"][value="${gender}"]`).checked = true;
+            forms['form-edit-child'].classList.remove('hidden');
+            forms['form-add-child'].classList.add('hidden');
+        }
+        function cancelEditChild() {
+            currentEditingChildId = null;
+            forms['form-edit-child'].classList.add('hidden');
+            forms['form-add-child'].classList.remove('hidden');
+            forms['form-edit-child'].reset();
+        }
+
+        // --- Lógica de Edición (Tareas) ---
+        function startEditTask(id, name, points) {
+            currentEditingTaskId = id;
+            elements.editTaskName.value = name;
+            elements.editTaskPoints.value = points;
+            forms['form-edit-task'].classList.remove('hidden');
+            forms['form-add-task'].classList.add('hidden');
+        }
+        function cancelEditTask() {
+            currentEditingTaskId = null;
+            forms['form-edit-task'].classList.add('hidden');
+            forms['form-add-task'].classList.remove('hidden');
+            forms['form-edit-task'].reset();
+        }
+
+        // --- Lógica de Edición (Penalidades) ---
+        function startEditPenalty(id, name, points) {
+            currentEditingPenaltyId = id;
+            elements.editPenaltyName.value = name;
+            elements.editPenaltyPoints.value = points;
+            forms['form-edit-penalty'].classList.remove('hidden');
+            forms['form-add-penalty'].classList.add('hidden');
+        }
+        function cancelEditPenalty() {
+            currentEditingPenaltyId = null;
+            forms['form-edit-penalty'].classList.add('hidden');
+            forms['form-add-penalty'].classList.remove('hidden');
+            forms['form-edit-penalty'].reset();
+        }
+
+        // --- Lógica de Edición (Recompensas) ---
+        function startEditReward(id, name, cost) {
+            currentEditingRewardId = id;
+            elements.editRewardName.value = name;
+            elements.editRewardCost.value = cost;
+            forms['form-edit-reward'].classList.remove('hidden');
+            forms['form-add-reward'].classList.add('hidden');
+        }
+        function cancelEditReward() {
+            currentEditingRewardId = null;
+            forms['form-edit-reward'].classList.add('hidden');
+            forms['form-add-reward'].classList.remove('hidden');
+            forms['form-edit-reward'].reset();
+        }
+
+
+        // --- Handlers (Firebase) ---
+
+        async function addPointsHistory(childId, childName, reason, points) {
+            if (!globalPointsHistoryRef) return;
+            try {
+                await addDoc(globalPointsHistoryRef, {
+                    childId,
+                    childName,
+                    reason,
+                    points,
+                    timestamp: serverTimestamp()
+                });
+            } catch (err) {
+                console.error("Error al guardar historial de puntos:", err);
+            }
+        }
+
+        // Gestión de Hijos
+        async function handleAddChild(e) {
+            e.preventDefault();
+            const name = e.target['child-name'].value;
+            const gender = e.target['gender'].value;
+            if (!name || !gender || !childrenRef) return;
+            showLoading(true);
+            try { 
+                await addDoc(childrenRef, { name, gender, totalPoints: 0 }); 
+                e.target.reset(); 
+            } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        async function handleEditChildSubmit(e) {
+            e.preventDefault();
+            if (!currentEditingChildId || !childrenRef) return;
+            const name = elements.editChildName.value;
+            const gender = e.target['edit-gender'].value;
+            if (!name || !gender) return;
+            showLoading(true);
+            try {
+                await updateDoc(doc(db, childrenRef.path, currentEditingChildId), { name, gender });
+                cancelEditChild();
+            } catch (err) { console.error(err); }
+            finally { showLoading(false); }
+        }
+        async function handleDeleteChild(childId, childName) {
+            if (!childrenRef) return;
+            // TODO: Añadir confirmación
+            // TODO: Borrar subcolecciones (tasks, pendingTasks)
+            showLoading(true);
+            try { 
+                await deleteDoc(doc(db, childrenRef.path, childId)); 
+            } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+
+        // Gestión de Tareas (por hijo)
+        async function handleAddTask(e) {
+            e.preventDefault();
+            if (!currentChildId || !childTasksRef) {
+                alert("Selecciona un hijo primero.");
+                return;
+            }
+            const name = e.target['task-name'].value;
+            const points = parseInt(e.target['task-points'].value, 10);
+            if (!name || points <= 0) return;
+            showLoading(true);
+            try { await addDoc(childTasksRef, { name, points }); e.target.reset(); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        async function handleEditTaskSubmit(e) {
+            e.preventDefault();
+            if (!currentEditingTaskId || !childTasksRef) return;
+            const name = elements.editTaskName.value;
+            const points = parseInt(elements.editTaskPoints.value, 10);
+            showLoading(true);
+            try {
+                await updateDoc(doc(db, childTasksRef.path, currentEditingTaskId), { name, points });
+                cancelEditTask();
+            } catch (err) { console.error(err); }
+            finally { showLoading(false); }
+        }
+        async function handleDeleteTask(taskId) {
+            if (!childTasksRef) return;
+            showLoading(true);
+            try { await deleteDoc(doc(db, childTasksRef.path, taskId)); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+
+        // Gestión de Recompensas (Global)
+        async function handleAddReward(e) {
+            e.preventDefault();
+            if (!globalRewardsRef) return;
+            const name = e.target['reward-name'].value;
+            const cost = parseInt(e.target['reward-cost'].value, 10);
+            if (!name || cost <= 0) return;
+            showLoading(true);
+            try { await addDoc(globalRewardsRef, { name, cost }); e.target.reset(); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        async function handleEditRewardSubmit(e) {
+            e.preventDefault();
+            if (!currentEditingRewardId || !globalRewardsRef) return;
+            const name = elements.editRewardName.value;
+            const cost = parseInt(elements.editRewardCost.value, 10);
+            showLoading(true);
+            try {
+                await updateDoc(doc(db, globalRewardsRef.path, currentEditingRewardId), { name, cost });
+                cancelEditReward();
+            } catch (err) { console.error(err); }
+            finally { showLoading(false); }
+        }
+        async function handleDeleteReward(id) {
+            if (!globalRewardsRef) return;
+            showLoading(true);
+            try { await deleteDoc(doc(db, globalRewardsRef.path, id)); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        
+        // Gestión de Penalidades (Global)
+         async function handleAddPenalty(e) {
+            e.preventDefault();
+            if (!globalPenaltiesRef) return;
+            const name = e.target['penalty-name'].value;
+            const points = parseInt(e.target['penalty-points'].value, 10);
+            if (!name || points <= 0) return;
+            showLoading(true);
+            try { await addDoc(globalPenaltiesRef, { name, points: Math.abs(points) }); e.target.reset(); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        async function handleEditPenaltySubmit(e) {
+            e.preventDefault();
+            if (!currentEditingPenaltyId || !globalPenaltiesRef) return;
+            const name = elements.editPenaltyName.value;
+            const points = parseInt(elements.editPenaltyPoints.value, 10);
+            showLoading(true);
+            try {
+                await updateDoc(doc(db, globalPenaltiesRef.path, currentEditingPenaltyId), { name, points: Math.abs(points) });
+                cancelEditPenalty();
+            } catch (err) { console.error(err); }
+            finally { showLoading(false); }
+        }
+        async function handleDeletePenalty(id) {
+            if (!globalPenaltiesRef) return;
+            showLoading(true);
+            try { await deleteDoc(doc(db, globalPenaltiesRef.path, id)); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        
+        // --- Handlers de Flujo de Puntos (Por Hijo) ---
+        
+        async function handleCompleteTask(taskId, name, points) {
+            if (!currentChildId || !childPendingTasksRef) return;
+            showLoading(true);
+            try { await addDoc(childPendingTasksRef, { taskId, name, points, requestedAt: serverTimestamp() }); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        
+        async function handleApproveTask(id, name, points) {
+            if (!currentChildId || !childPendingTasksRef || !childrenRef) return;
+            showLoading(true);
+            try {
+                const newTotal = (localTotalPoints || 0) + points;
+                const childDocRef = doc(db, childrenRef.path, currentChildId);
+                
+                const batch = writeBatch(db);
+                batch.update(childDocRef, { totalPoints: newTotal });
+                batch.delete(doc(db, childPendingTasksRef.path, id));
+                await batch.commit();
+
+                await addPointsHistory(currentChildId, currentChildName, `Tarea: ${name}`, points);
+
+            } catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        
+        async function handleRejectTask(id) {
+            if (!childPendingTasksRef) return;
+            showLoading(true);
+            try { await deleteDoc(doc(db, childPendingTasksRef.path, id)); } 
+            catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+        
+        async function handleRedeemReward(id, name, cost) {
+            if (localTotalPoints < cost || !currentChildId || !childrenRef || !globalRedeemedRef) return;
+            showLoading(true);
+            try {
+                const newTotal = localTotalPoints - cost;
+                const childDocRef = doc(db, childrenRef.path, currentChildId);
+                
+                const batch = writeBatch(db);
+                batch.update(childDocRef, { totalPoints: newTotal });
+                const newRef = doc(collection(db, globalRedeemedRef.path));
+                batch.set(newRef, { childId: currentChildId, childName: currentChildName, name, cost, redeemedAt: serverTimestamp() });
+                await batch.commit();
+                
+                await addPointsHistory(currentChildId, currentChildName, `Canje: ${name}`, -cost);
+                
+            } catch (err) { console.error(err); } 
+            finally { showLoading(false); }
+        }
+
+        async function handleApplyPenalty(name, points) {
+            if (!currentChildId || !childrenRef) return;
+            showLoading(true);
+            try {
+                const newTotal = (localTotalPoints || 0) - Math.abs(points);
+                const childDocRef = doc(db, childrenRef.path, currentChildId);
+                await updateDoc(childDocRef, { totalPoints: newTotal });
+                
+                await addPointsHistory(currentChildId, currentChildName, `Penalidad: ${name}`, -points);
+
+            } catch (err) {
+                console.error(err);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+
+        // --- Listeners de DB ---
+        function setupGlobalFirestoreListeners() {
+            if (!globalProfileRef) return; 
+            
+            globalProfileListener = onSnapshot(globalProfileRef, (doc) => {
+                if (doc.exists()) {
+                    localLastReset = doc.data().lastReset || null;
+                } else { 
+                    setDoc(globalProfileRef, { lastReset: new Date().toISOString().split('T')[0] });
+                    localLastReset = new Date().toISOString().split('T')[0];
+                }
+                
+                if (localChildren.length > 0) {
+                     checkDailyReset(); 
+                }
+               
+            }, (error) => console.error("Error en listener de globalProfileRef:", error));
+
+            childrenListener = onSnapshot(childrenRef, (s) => {
+                localChildren = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderChildLoginList();
+                renderChildrenEditList();
+                if(localUserMode === 'admin') populateAdminSelects();
+                
+                if(localUserMode === 'child' && currentChildId) {
+                    const myData = localChildren.find(c => c.id === currentChildId);
+                    if (myData) {
+                        localTotalPoints = myData.totalPoints;
+                        updatePointsDisplay();
+                    } else {
+                        logout();
+                    }
+                } else if (localUserMode !== 'admin') {
+                     // Si no estoy en modo admin y no estoy logueado como hijo
+                     // (ej. acabo de loguear como admin)
+                     // O si es la primera carga tras login de admin
+                     // Muestra el login de hijos si es necesario
+                     if (localUserMode === 'unknown' && auth.currentUser) {
+                        checkCachedMode(auth.currentUser);
+                     }
+                }
+            }, (error) => console.error("Error en listener de childrenRef:", error));
+
+            globalRewardsListener = onSnapshot(globalRewardsRef, (s) => {
+                localRewards = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderRewardsList();
+                renderRewardsEditList(); 
+            }, (error) => console.error("Error en listener de globalRewardsRef:", error));
+
+            globalPenaltiesListener = onSnapshot(globalPenaltiesRef, (s) => {
+                localPenalties = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderPenaltiesApplyList();
+                renderPenaltiesEditList();
+            }, (error) => console.error("Error en listener de globalPenaltiesRef:", error));
+            
+            // TODO: Listener para canjeados globales
+        }
+
+
+        function setupChildFirestoreListeners() {
+            if(tasksListener) tasksListener();
+            if(pendingTasksListener) pendingTasksListener();
+            if(historyListener) historyListener();
+            
+            if (!currentChildId || !childTasksRef) return;
+
+            tasksListener = onSnapshot(childTasksRef, (s) => {
+                localTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderTasksList();
+                if(localUserMode === 'admin') renderActiveTasksEditList();
+            }, (error) => console.error("Error en listener de childTasksRef:", error));
+
+            pendingTasksListener = onSnapshot(childPendingTasksRef, (s) => {
+                localPendingTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                renderTasksList(); 
+                if(localUserMode === 'admin') renderPendingTasksList();
+            }, (error) => console.error("Error en listener de childPendingTasksRef:", error));
+
+            const historyQuery = query(globalPointsHistoryRef, where("childId", "==", currentChildId), limit(50));
+            historyListener = onSnapshot(historyQuery, (s) => {
+                let historyData = s.docs.map(d => {
+                    const data = d.data();
+                    if (data.timestamp && data.timestamp.toDate) {
+                        data.timestamp = data.timestamp.toDate();
+                    } else {
+                        data.timestamp = new Date(0); 
+                    }
+                    return data;
+                });
+                
+                historyData.sort((a, b) => b.timestamp - a.timestamp);
+                localPointsHistory = historyData.slice(0, 20);
+                
+                renderPointsHistory();
+            }, (error) => console.error("Error en listener de globalPointsHistoryRef:", error));
+        }
+
+    </script>
+    <style>
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loader { animation: spin 1s linear infinite; }
+        .main-menu-button {
+            @apply w-full text-white font-bold rounded-2xl shadow-lg
+                   flex flex-col justify-center items-center transition-transform 
+                   duration-200 ease-in-out transform hover:scale-105 gap-2 px-4 py-6;
+        }
+        body { font-family: 'Segoe UI', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+
+    <div class="container mx-auto max-w-lg p-4 min-h-screen relative">
+        <!-- Overlay de Carga -->
+        <div id="page-loading" class="fixed inset-0 bg-white flex justify-center items-center z-50">
+            <div class="loader border-4 border-blue-200 border-t-blue-600 rounded-full w-12 h-12"></div>
+        </div>
+
+        <!-- === Página de Login === -->
+        <div id="page-login" class="hidden">
+             <header class="text-center mb-12 mt-16">
+                <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">App de Recompensas</h1>
+                <p class="text-xl text-gray-600 mt-4">Inicia sesión o crea una cuenta</p>
+            </header>
+            <div class="space-y-4">
+                <button id="btn-login-google" class="w-full bg-white text-gray-700 p-4 rounded-lg shadow-md border border-gray-200 flex justify-center items-center gap-3 hover:bg-gray-50 transition-colors">
+                    <svg class="w-6 h-6" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.79 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.94 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.46 2.09 14.97 1 12 1 7.7 1 3.99 3.06 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/><path fill="none" d="M1 1h22v22H1z"/></svg>
+                    <span class="font-bold">Continuar con Google</span>
+                </button>
+                
+                <div class="relative flex py-2 items-center">
+                    <div class="flex-grow border-t border-gray-300"></div>
+                    <span class="flex-shrink mx-4 text-gray-500">o</span>
+                    <div class="flex-grow border-t border-gray-300"></div>
+                </div>
+
+                <button id="btn-show-email-login" class="w-full bg-gray-600 text-white p-4 rounded-lg font-bold hover:bg-gray-700">Continuar con Email</button>
+                
+                <div id="email-login-form" class="hidden bg-white p-4 rounded-lg shadow-md border">
+                    <form id="form-email-login" class="space-y-3">
+                        <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
+                        <input type="password" name="password" placeholder="Contraseña" class="w-full p-3 border rounded-lg" required>
+                        <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Iniciar Sesión</button>
+                        <p id="login-error" class="text-red-500 text-sm hidden"></p>
+                    </form>
+                </div>
+                
+                <button id="btn-show-email-register" class="w-full text-center text-blue-600 hover:underline">No tengo cuenta (Crear una)</button>
+                
+                <div id="email-register-form" class="hidden bg-white p-4 rounded-lg shadow-md border">
+                    <form id="form-email-register" class="space-y-3">
+                        <input type="email" name="email" placeholder="Email" class="w-full p-3 border rounded-lg" required>
+                        <input type="password" name="password" placeholder="Contraseña (mín. 6 caracteres)" class="w-full p-3 border rounded-lg" required>
+                        <button type="submit" class="w-full bg-green-500 text-white p-3 rounded-lg font-bold">Crear Cuenta</button>
+                        <p id="register-error" class="text-red-500 text-sm hidden"></p>
+                    </form>
+                </div>
+
+            </div>
+        </div>
+        
+        <!-- === Modal de PIN (para salir de modo hijo) === -->
+        <div id="page-pin-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex justify-center items-center z-40 p-4">
+            <div class="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm">
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Modo Admin</h2>
+                <p class="text-center text-gray-600 mb-6">Ingresa el PIN para volver al panel de admin.</p>
+                <form id="form-pin" class="space-y-4">
+                    <input type="password" id="pin-input" pattern="[0-9]*" inputmode="numeric" maxlength="4" class="w-full p-4 text-3xl text-center tracking-widest border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-blue-500" required>
+                    <p id="pin-error" class="text-red-500 text-center hidden">PIN incorrecto.</p>
+                    <button type="submit" id="btn-pin-submit" class="w-full bg-blue-500 text-white p-4 rounded-lg font-bold text-lg hover:bg-blue-600 transition-colors">Entrar</button>
+                    <button type="button" id="btn-pin-cancel" class="w-full bg-gray-200 text-gray-700 p-3 rounded-lg font-bold hover:bg-gray-300 transition-colors">Cancelar</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- === Página Principal (Admin y selección de Hijo) === -->
+        <div id="page-main" class="hidden">
+            <!-- Header Admin -->
+            <header class="admin-only flex justify-between items-center mb-8 mt-4">
+                <div class="text-left">
+                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight">Panel Admin</h1>
+                    <p id="admin-name-header" class="text-sm text-gray-600"></p>
+                </div>
+                <button id="btn-admin-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
+            </header>
+            <!-- Header Hijo -->
+             <header class="child-only flex justify-between items-center mb-8 mt-4">
+                <div class="text-left">
+                    <h1 class="text-4xl font-extrabold text-blue-600 tracking-tight" id="child-name-header">Hola!</h1>
+                    <div id="total-points-header" class="text-2xl font-bold text-yellow-500 mt-1">...</div>
+                </div>
+                <button id="btn-child-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Volver</button>
+            </header>
+            
+            <!-- Login de Hijos (visible en modo Admin) -->
+            <div class="admin-only mb-6">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Acceder como:</h2>
+                <div id="child-login-list" class="space-y-4">
+                    <!-- Botones de hijos (ej. 👧 Ana) se insertan aquí -->
+                </div>
+            </div>
+
+            <nav class="grid grid-cols-2 gap-4">
+                <!-- Botones de Hijo -->
+                <button id="btn-tasks" class="main-menu-button bg-blue-500 child-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_d51dde8ebc2448e4b7b9024695d228dc~mv2.png" alt="Tareas" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/3B82F6/FFFFFF?text=Tareas'">
+                    <span class="text-lg text-center">Tareas Diarias</span>
+                </button>
+                <button id="btn-points" class="main-menu-button bg-green-500 child-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_be54b83d9e814163a2855dad5df2ba90~mv2.png" alt="Puntos" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/22C55E/FFFFFF?text=Puntos'">
+                    <span class="text-lg text-center">Puntos</span>
+                </button>
+                <button id="btn-redeem" class="main-menu-button bg-purple-500 child-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
+                    <span class="text-lg text-center">Canjear Puntos</span>
+                </button>
+                <button id="btn-redeemed-list" class="main-menu-button bg-pink-500 child-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_4005beb44e7846c3bf7d343f28aa1552~mv2.png" alt="Historial" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EC4899/FFFFFF?text=Canjes'">
+                    <span class="text-lg text-center">Lista de Canjes</span>
+                </button>
+
+                <!-- Botones de Admin -->
+                <button id="btn-manage-children" class="main-menu-button bg-cyan-500 admin-only">
+                    <span class="text-5xl">👫</span>
+                    <span class="text-lg text-center">Gestionar Hijos</span>
+                </button>
+                <button id="btn-evaluate" class="main-menu-button bg-yellow-500 text-yellow-900 admin-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_1dddc78199a14d2e85b10b90ec28e8e0~mv2.png" alt="Evaluar" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EAB308/FFFFFF?text=Evaluar'">
+                    <span class="text-lg text-center">Evaluar Tareas</span>
+                </button>
+                 <button id="btn-penalties" class="main-menu-button bg-red-600 admin-only">
+                    <img src="https://static.wixstatic.com/media/63d26f_dca1939b25bb471f92cbeb25d4e578bd~mv2.png" alt="Penalidad" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/DC2626/FFFFFF?text=Penalidad'">
+                    <span class="text-lg text-center">Penalidad</span>
+                </button>
+                <button id="btn-manage-tasks" class="main-menu-button bg-blue-500 admin-only">
+                     <img src="https://static.wixstatic.com/media/63d26f_d51dde8ebc2448e4b7b9024695d228dc~mv2.png" alt="Tareas" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/3B82F6/FFFFFF?text=Tareas'">
+                    <span class="text-lg text-center">Gestionar Tareas</span>
+                </button>
+                <button class="main-menu-button bg-purple-500 admin-only" onclick="document.getElementById('page-redeem').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
+                    <img src="https://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
+                    <span class="text-lg text-center">Gestionar Tienda</span>
+                </button>
+                <button class="main-menu-button bg-pink-500 admin-only" onclick="document.getElementById('page-redeemed-list').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
+                    <img src="https://static.wixstatic.com/media/63d26f_4005beb44e7846c3bf7d343f28aa1552~mv2.png" alt="Historial" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EC4899/FFFFFF?text=Canjes'">
+                    <span class="text-lg text-center">Ver Canjes Global</span>
+                </button>
+            </nav>
+        </div>
+        
+        <!-- === Página Gestionar Hijos (Admin) === -->
+        <div id="page-manage-children" class="hidden admin-only">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-cyan-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-cyan-600 ml-4">Gestionar Hijos</h1>
+            </header>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Hijo</h2>
+                <form id="form-add-child" class="space-y-3">
+                    <input type="text" name="child-name" placeholder="Nombre del hijo" class="w-full p-3 border rounded-lg" required>
+                    <div class="flex justify-around p-2 bg-gray-100 rounded-lg">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="gender" value="girl" class="text-pink-500 focus:ring-pink-400" checked>
+                            <span class="text-3xl">👧</span> Niña
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="gender" value="boy" class="text-blue-500 focus:ring-blue-400">
+                            <span class="text-3xl">👦</span> Niño
+                        </label>
+                    </div>
+                    <button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Guardar Hijo</button>
+                </form>
+                
+                <form id="form-edit-child" class="hidden space-y-3 bg-cyan-50 p-3 rounded-lg mt-3 border border-cyan-200">
+                    <p class="font-bold text-cyan-800">Editando Hijo:</p>
+                    <input type="text" id="edit-child-name" class="w-full p-3 border rounded-lg" required>
+                    <div id="edit-child-gender" class="flex justify-around p-2 bg-gray-100 rounded-lg">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="edit-gender" value="girl" class="text-pink-500 focus:ring-pink-400">
+                            <span class="text-3xl">👧</span> Niña
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="edit-gender" value="boy" class="text-blue-500 focus:ring-blue-400">
+                            <span class="text-3xl">👦</span> Niño
+                        </label>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
+                        <button type="button" id="btn-edit-child-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-20">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Lista de Hijos</h2>
+                <div id="children-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+        </div>
+
+        <!-- === Tareas Diarias (Hijo) === -->
+        <div id="page-tasks" class="hidden child-only">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-blue-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-blue-600 ml-4">Tareas Diarias</h1>
+            </header>
+            <div id="tasks-list-container" class="space-y-3 pb-20"></div>
+        </div>
+
+        <!-- === Puntos (Hijo) === -->
+        <div id="page-points" class="hidden child-only">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-green-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-green-600 ml-4">Mis Puntos</h1>
+            </header>
+            <div class="flex flex-col items-center justify-center p-10 bg-white rounded-3xl shadow-xl border-4 border-green-100 mb-6">
+                <span class="text-8xl font-black text-green-500" id="total-points-display">0</span>
+                <span class="text-2xl text-green-700 font-bold mt-2">PUNTOS TOTALES</span>
+            </div>
+            
+            <h2 class="text-2xl font-bold text-gray-800 mb-4">Historial Reciente</h2>
+            <div id="points-history-list" class="space-y-2 pb-20">
+                <!-- Historial se inserta aquí -->
+            </div>
+        </div>
+
+        <!-- === Evaluar Tareas (Admin) === -->
+        <div id="page-evaluate" class="hidden admin-only">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-yellow-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-yellow-600 ml-4">Evaluar Tareas</h1>
+            </header>
+            
+            <div class="mb-6">
+                <label for="child-select-evaluate" class="block text-sm font-medium text-gray-700 mb-2">Selecciona un hijo:</label>
+                <select id="child-select-evaluate" class="w-full p-3 border rounded-lg"></select>
+            </div>
+            
+            <div class="mb-8">
+                <h2 class="text-xl font-bold text-gray-800 mb-3">Pendientes de Aprobar</h2>
+                <div id="pending-tasks-list-container" class="space-y-3"></div>
+            </div>
+        </div>
+
+        <!-- === Gestionar Tareas (Admin) === -->
+        <div id="page-manage-tasks" class="hidden admin-only">
+             <header class="flex items-center mb-6">
+                <button class="btn-back text-blue-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-blue-600 ml-4">Gestionar Tareas</h1>
+            </header>
+
+            <div class="mb-6">
+                <label for="child-select-tasks" class="block text-sm font-medium text-gray-700 mb-2">Selecciona un hijo:</label>
+                <select id="child-select-tasks" class="w-full p-3 border rounded-lg"></select>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Tarea (para el hijo sel.)</h2>
+                <form id="form-add-task" class="space-y-3">
+                    <input type="text" id="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
+                    <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Guardar</button>
+                </form>
+                
+                <form id="form-edit-task" class="hidden space-y-3 bg-blue-50 p-3 rounded-lg mt-3 border border-blue-200">
+                    <p class="font-bold text-blue-800">Editando Tarea:</p>
+                    <input type="text" id="edit-task-name" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="edit-task-points" class="w-full p-3 border rounded-lg" required>
+                    <div class="flex gap-2">
+                        <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
+                        <button type="button" id="btn-edit-task-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Lista de Tareas (del hijo sel.)</h2>
+                <div id="active-tasks-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+        </div>
+
+        <!-- === Tienda (Hijo y Admin) === -->
+        <div id="page-redeem" class="hidden">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-purple-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-purple-600 ml-4">Tienda</h1>
+            </header>
+            <div id="rewards-list-container" class="space-y-3 mb-8"></div>
+            
+            <!-- SECCIÓN ADMIN PARA AÑADIR/EDITAR RECOMPENSAS -->
+            <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Nueva Recompensa (para tu familia)</h2>
+                <form id="form-add-reward" class="space-y-3">
+                    <input type="text" id="reward-name" placeholder="Nombre del premio" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="reward-cost" placeholder="Costo" class="w-full p-3 border rounded-lg" required>
+                    <button type="submit" class="w-full bg-purple-500 text-white p-3 rounded-lg font-bold">Añadir</button>
+                </form>
+
+                <form id="form-edit-reward" class="hidden space-y-3 bg-blue-50 p-3 rounded-lg mt-3 border border-blue-200">
+                    <p class="font-bold text-blue-800">Editando Recompensa:</p>
+                    <input type="text" id="edit-reward-name" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="edit-reward-cost" class="w-full p-3 border rounded-lg" required>
+                    <div class="flex gap-2">
+                        <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
+                        <button type="button" id="btn-edit-reward-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Recompensas</h2>
+                <div id="rewards-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+
+        </div>
+
+        <!-- === Historial (Hijo y Admin) === -->
+        <div id="page-redeemed-list" class="hidden">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-pink-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-pink-600 ml-4">Historial de Canjes</h1>
+            </header>
+            <div id="redeemed-rewards-list-container" class="space-y-3 pb-20"></div>
+        </div>
+
+        <!-- === Penalidades (Admin) === -->
+        <div id="page-penalties" class="hidden admin-only">
+            <header class="flex items-center mb-6">
+                <button class="btn-back text-red-600 font-bold text-xl">⬅</button>
+                <h1 class="text-3xl font-bold text-red-600 ml-4">Penalidad</h1>
+            </header>
+            
+            <div class="mb-6">
+                <label for="child-select-penalties" class="block text-sm font-medium text-gray-700 mb-2">Selecciona un hijo:</label>
+                <select id="child-select-penalties" class="w-full p-3 border rounded-lg"></select>
+            </div>
+
+            <div class="mb-8">
+                <h2 class="text-xl font-bold text-gray-800 mb-3">Aplicar Penalidad</h2>
+                <div id="penalties-apply-list-container" class="space-y-3"></div>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Penalidad (para tu familia)</h2>
+                <form id="form-add-penalty" class="space-y-3">
+                    <input type="text" id="penalty-name" placeholder="Nombre de la penalidad" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="penalty-points" placeholder="Puntos (ej: 150)" class="w-full p-3 border rounded-lg" required>
+                    <button type="submit" class="w-full bg-red-500 text-white p-3 rounded-lg font-bold">Guardar</button>
+                </form>
+                
+                <form id="form-edit-penalty" class="hidden space-y-3 bg-red-50 p-3 rounded-lg mt-3 border border-red-200">
+                    <p class="font-bold text-red-800">Editando Penalidad:</p>
+                    <input type="text" id="edit-penalty-name" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="edit-penalty-points" class="w-full p-3 border rounded-lg" required>
+                    <div class="flex gap-2">
+                        <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
+                        <button type="button" id="btn-edit-penalty-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Administrar Penalidades</h2>
+                <div id="penalties-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
