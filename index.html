@@ -37,11 +37,10 @@
             serverTimestamp,
             orderBy,
             limit,
-            increment // <-- *** IMPORTACIÓN AÑADIDA ***
+            increment
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Configuración de Firebase ---
-        // ¡¡IMPORTANTE!! DEBES REEMPLAZAR ESTO CON TUS PROPIAS LLAVES
         const firebaseConfig = {
             apiKey: "AIzaSyDBzsAiJQ6ktFWUxYSpWDXsWdBwMoW3bNo",
             authDomain: "app-recompensas-familias.firebaseapp.com",
@@ -55,39 +54,37 @@
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'multi-family-reward-app';
         
         // --- CÓDIGO PIN (Admin) ---
-        const ADMIN_PIN = '0000'; // PIN para salir del modo hijo
+        const ADMIN_PIN = '0000'; 
 
-        // *** NUEVA FUNCIÓN HELPER ***
+        // *** HELPER FECHAS ***
         function getLocalDateString() {
             const date = new Date();
             const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0'); // Meses son 0-11
+            const month = String(date.getMonth() + 1).padStart(2, '0'); 
             const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`; // Retorna "YYYY-MM-DD"
+            return `${year}-${month}-${day}`; 
         }
 
         // --- Inicialización ---
         let app, db, auth, provider;
-        let currentUserId = null; // ID del Papá/Mamá (Admin)
+        let currentUserId = null; 
         
-        // --- Referencias Dinámicas (por familia) ---
-        let familyDocRef; // Documento de la familia (para 'lastReset')
+        let familyDocRef; 
         let childrenRef, tasksRef, pendingTasksRef, rewardsRef, penaltiesRef, pointsHistoryRef, redeemedRewardsRef, tasksCooldownRef;
 
-        // --- Estado Local ---
-        let localUserMode = 'unknown'; // 'unknown', 'child', 'admin'
-        let currentChildId = null; // ID del hijo seleccionado
-        let currentChildName = ""; // Nombre del hijo
+        let localUserMode = 'unknown'; 
+        let currentChildId = null; 
+        let currentChildName = ""; 
         
         let localChildren = [];
         let localTasks = [];
         let localPendingTasks = [];
-        let localTasksCooldown = []; // <-- NUEVO: Tareas en cooldown
+        let localTasksCooldown = []; 
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
-        let localTotalPoints = 0; // Puntos del hijo seleccionado
-        let localLastReset = null; // Reseteo de la familia
+        let localTotalPoints = 0; 
+        let localLastReset = null; 
 
         let currentEditingTaskId = null;
         let currentEditingPenaltyId = null;
@@ -103,11 +100,11 @@
         let elements = {};
         let selects = {};
 
-        // --- Listeners (para limpiar) ---
+        // --- Listeners ---
         let childrenListener = null;
         let tasksListener = null;
         let pendingTasksListener = null;
-        let tasksCooldownListener = null; // <-- NUEVO
+        let tasksCooldownListener = null; 
         let rewardsListener = null;
         let penaltiesListener = null;
         let pointsHistoryListener = null;
@@ -125,13 +122,13 @@
                 auth = getAuth(app);
                 provider = new GoogleAuthProvider();
 
-                setupAuthListener(); // Esto decidirá si mostrar Login o App
+                setupAuthListener(); 
 
             } catch (error) {
                 console.error("Error crítico en la inicialización:", error);
                 showPage('page-login'); 
             } finally {
-                showLoading(false);
+                // showLoading(false); // Se maneja en AuthListener
             }
         });
 
@@ -165,7 +162,7 @@
                 'btn-penalties': document.getElementById('btn-penalties'),
                 'btn-manage-children': document.getElementById('btn-manage-children'),
                 'btn-manage-tasks': document.getElementById('btn-manage-tasks'),
-                'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'), // <-- Botón de candado
+                'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'),
                 back: document.querySelectorAll('.btn-back')
             };
 
@@ -250,15 +247,11 @@
             buttons['btn-manage-children'].addEventListener('click', () => showPage('page-manage-children'));
             buttons['btn-manage-tasks'].addEventListener('click', () => showPage('page-manage-tasks'));
             
-            // *** CORRECCIÓN DE BOTÓN 'ATRÁS' ***
             buttons.back.forEach(btn => {
                 btn.addEventListener('click', () => {
-                    // Si salimos de una página de admin, volvemos al panel de admin
                     if (localUserMode === 'admin') {
                         clearAdminSelects();
                     }
-                    // Si es 'child', no hace nada especial, solo muestra page-main
-                    // Esto evita que el niño salga al modo admin por error.
                     showPage('page-main');
                 });
             });
@@ -267,22 +260,19 @@
             forms['form-pin'].addEventListener('submit', handlePinValidate);
             buttons['btn-pin-cancel'].addEventListener('click', () => showPage('page-main'));
 
-            // *** NUEVO LISTENER ***
             // Listener para el nuevo botón de "Salir a Admin" (Candado)
             buttons['btn-exit-child-mode'].addEventListener('click', handleShowPinModal);
 
 
-            // Forms Admin - Gestión de Hijos
+            // Forms Admin
             forms['form-add-child'].addEventListener('submit', handleAddChild);
             forms['form-edit-child'].addEventListener('submit', handleEditChildSubmit);
             elements.editChildCancel.addEventListener('click', cancelEditChild);
             
-            // Forms Admin - Gestión de Tareas (depende del select)
             forms['form-add-task'].addEventListener('submit', handleAddTask);
             forms['form-edit-task'].addEventListener('submit', handleEditTaskSubmit);
             elements.editTaskCancel.addEventListener('click', cancelEditTask);
 
-            // Forms Admin - Gestión Global
             forms['form-add-reward'].addEventListener('submit', handleAddReward);
             forms['form-edit-reward'].addEventListener('submit', handleEditRewardSubmit); 
             elements.editRewardCancel.addEventListener('click', cancelEditReward); 
@@ -290,7 +280,7 @@
             forms['form-edit-penalty'].addEventListener('submit', handleEditPenaltySubmit);
             elements.editPenaltyCancel.addEventListener('click', cancelEditPenalty);
 
-            // Selects de Admin
+            // Selects
             selects['child-select-evaluate'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'evaluate'));
             selects['child-select-penalties'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'penalties'));
             selects['child-select-tasks'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'tasks'));
@@ -301,13 +291,32 @@
         function setupAuthListener() {
             onAuthStateChanged(auth, (user) => {
                 if (user) {
-                    // Usuario está logueado (Admin)
+                    // Usuario logueado
                     currentUserId = user.uid;
-                    setAdminMode(user.uid);
+                    
+                    // Configurar referencias globales (necesarias para ambos modos)
+                    setupGlobalFirestoreReferences(user.uid);
+                    setupGlobalFirestoreListeners(); // Esto trae la lista de hijos
+
+                    // *** LÓGICA DE PERSISTENCIA DE SESIÓN ***
+                    const savedMode = localStorage.getItem('app_user_mode');
+                    const savedChildId = localStorage.getItem('app_child_id');
+
+                    if (savedMode === 'child' && savedChildId) {
+                        console.log("Restaurando sesión de hijo:", savedChildId);
+                        // Restaurar modo hijo directamente
+                        // Nota: El nombre y puntos se actualizarán cuando el listener de 'childrenRef' descargue los datos
+                        setChildMode(savedChildId, "Cargando...", 0, "girl"); 
+                    } else {
+                        // Modo Admin por defecto
+                        setAdminMode(user.uid);
+                    }
                 } else {
-                    // Usuario no está logueado
+                    // No logueado
                     currentUserId = null;
                     clearAllListeners();
+                    localStorage.removeItem('app_user_mode'); // Limpiar sesión
+                    localStorage.removeItem('app_child_id');
                     showPage('page-login');
                     showLoading(false);
                 }
@@ -319,7 +328,6 @@
             clearLoginErrors();
             try {
                 await signInWithPopup(auth, provider);
-                // El auth listener (setupAuthListener) se encargará del resto
             } catch (error) {
                 console.error("Error en login con Google:", error);
                 elements.loginError.textContent = `Error: ${error.message}`;
@@ -336,7 +344,6 @@
             const password = e.target.password.value;
             try {
                 await signInWithEmailAndPassword(auth, email, password);
-                // El auth listener se encargará
             } catch (error) {
                 console.error("Error en login con Email:", error);
                 elements.loginError.textContent = `Error: ${error.message}`;
@@ -353,7 +360,6 @@
             const password = e.target.password.value;
             try {
                 await createUserWithEmailAndPassword(auth, email, password);
-                // El auth listener se encargará
             } catch (error) {
                 console.error("Error en registro con Email:", error);
                 elements.registerError.textContent = `Error: ${error.message}`;
@@ -364,9 +370,9 @@
 
         async function logout() {
             showLoading(true);
-            clearAllData(); // Limpia estado local
+            clearAllData(); 
+            localStorage.clear(); // Limpiar todo al salir
             await signOut(auth);
-            // El auth listener se encargará de mostrar la página de login
         }
 
         function showLoginForm(mode) {
@@ -393,11 +399,16 @@
 
         function setAdminMode(adminUserId) {
             localUserMode = 'admin';
-            currentUserId = adminUserId; // ID del papá
+            currentUserId = adminUserId; 
             
-            clearChildContext(); // Limpia datos del hijo si los había
-            setupGlobalFirestoreReferences(adminUserId); // Define las rutas de la familia
-            setupGlobalFirestoreListeners(); // Escucha hijos, recompensas, etc.
+            // Persistencia
+            localStorage.setItem('app_user_mode', 'admin');
+            localStorage.removeItem('app_child_id');
+
+            clearChildContext(); 
+            // setupGlobal... ya se llaman en el AuthListener, pero no hace daño asegurar
+            // setupGlobalFirestoreReferences(adminUserId); 
+            // setupGlobalFirestoreListeners(); 
 
             updateAdminUI('admin');
             showPage('page-main');
@@ -410,8 +421,10 @@
             currentChildName = childName;
             localTotalPoints = points;
             
-            // Las referencias globales (recompensas) ya están activas
-            // Solo necesitamos activar las del hijo
+            // Persistencia
+            localStorage.setItem('app_user_mode', 'child');
+            localStorage.setItem('app_child_id', childId);
+
             setupChildFirestoreReferences(childId);
             setupChildFirestoreListeners();
             updateAdminUI('child');
@@ -420,11 +433,10 @@
             const genderEmoji = gender === 'boy' ? '👦' : '👧';
             elements.childNameHeader.textContent = `Hola, ${childName}! ${genderEmoji}`;
             showPage('page-main');
+            showLoading(false);
         }
 
-        // *** NUEVA FUNCIÓN ***
         function handleShowPinModal() {
-            // Limpia el input y el error por si acaso
             elements.pinInput.value = '';
             elements.pinError.classList.add('hidden');
             showPage('page-pin-modal');
@@ -433,10 +445,10 @@
         function handlePinValidate(e) {
             e.preventDefault();
             const pin = elements.pinInput.value;
-            if (pin === ADMIN_PIN) { // TODO: Hacer PIN por familia
+            if (pin === ADMIN_PIN) { 
                 elements.pinInput.value = '';
                 elements.pinError.classList.add('hidden');
-                setAdminMode(currentUserId); // Vuelve al modo admin
+                setAdminMode(currentUserId); // Cambia a admin y actualiza localStorage
             } else {
                 elements.pinError.classList.remove('hidden');
             }
@@ -449,11 +461,11 @@
             if (mode === 'child') {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.remove('hidden'));
-                buttons['btn-logout'].classList.add('hidden'); // Ocultar logout en modo hijo
+                buttons['btn-logout'].classList.add('hidden'); 
             } else if (mode === 'admin') {
                 adminElements.forEach(el => el.classList.remove('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
-                buttons['btn-logout'].classList.remove('hidden'); // Mostrar logout en modo admin
+                buttons['btn-logout'].classList.remove('hidden'); 
             } else {
                 adminElements.forEach(el => el.classList.add('hidden'));
                 childElements.forEach(el => el.classList.add('hidden'));
@@ -464,7 +476,7 @@
         // --- Lógica de Reinicio Diario ---
         async function checkDailyReset() {
             if (!familyDocRef) return;
-            const today = getLocalDateString(); // <-- MODIFICADO (Usa hora local)
+            const today = getLocalDateString(); 
             
             if (localLastReset && localLastReset !== today) {
                 console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
@@ -472,21 +484,16 @@
                 try {
                     const batch = writeBatch(db);
                     
-                    // Limpiar TAREAS PENDIENTES de TODOS los hijos de ESTA familia
                     for (const child of localChildren) {
-                        // CORRECCIÓN: Usar la referencia global a pendingTasksRef y filtrar por child.id
                         const childPendingTasksQuery = query(pendingTasksRef, where("childId", "==", child.id));
                         const pendingSnapshot = await getDocs(childPendingTasksQuery);
                         pendingSnapshot.docs.forEach(d => batch.delete(d.ref));
                     }
 
-                    // *** NUEVO: Limpiar TAREAS EN COOLDOWN del día anterior ***
-                    // (Aunque el listener ya no las leerá, es bueno limpiar la DB)
-                    const yesterdayStr = localLastReset; // El localLastReset *es* la fecha de ayer
+                    const yesterdayStr = localLastReset; 
                     const cooldownQuery = query(tasksCooldownRef, where("date", "==", yesterdayStr));
                     const cooldownSnapshot = await getDocs(cooldownQuery);
                     cooldownSnapshot.docs.forEach(d => batch.delete(d.ref));
-                    // *** FIN NUEVO ***
                     
                     batch.set(familyDocRef, { lastReset: today }, { merge: true });
                     await batch.commit();
@@ -508,7 +515,7 @@
             localChildren = [];
             localTasks = [];
             localPendingTasks = [];
-            localTasksCooldown = []; // <-- NUEVO
+            localTasksCooldown = []; 
             localRewards = [];
             localPenalties = [];
             localPointsHistory = [];
@@ -533,19 +540,17 @@
             localTasks = [];
             localPendingTasks = [];
             localPointsHistory = [];
-            localTasksCooldown = []; // <-- NUEVO
+            localTasksCooldown = []; 
             
-            // Limpia listeners de hijo
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
-            if(tasksCooldownListener) tasksCooldownListener(); // <-- NUEVO
+            if(tasksCooldownListener) tasksCooldownListener(); 
             tasksListener = null;
             pendingTasksListener = null;
             pointsHistoryListener = null;
-            tasksCooldownListener = null; // <-- NUEVO
+            tasksCooldownListener = null; 
 
-            // Limpia las vistas
             renderTasksList();
             renderPendingTasksList();
             renderPointsHistory();
@@ -556,7 +561,7 @@
              Object.values(selects).forEach(select => {
                  if (select) select.value = "";
              });
-             clearChildContext(); // Limpia los datos del hijo seleccionado
+             clearChildContext(); 
         }
 
         function showPage(pageId) {
@@ -588,24 +593,23 @@
             
             selectsToPopulate.forEach(select => {
                 if (!select) return;
-                const currentValue = select.value; // Guardar el valor actual
-                select.innerHTML = '<option value="">Selecciona un hijo...</option>'; // Reset
+                const currentValue = select.value; 
+                select.innerHTML = '<option value="">Selecciona un hijo...</option>'; 
                 localChildren.forEach(child => {
                     const option = document.createElement('option');
                     option.value = child.id;
                     option.textContent = child.name;
                     select.appendChild(option);
                 });
-                select.value = currentValue; // Restaurar el valor si aún existe
+                select.value = currentValue; 
             });
         }
 
-        // Contexto que se activa al seleccionar un hijo en un panel de admin
         function setupAdminPageContext(childId, pageKey) {
-            clearChildContext(); // Limpia listeners y datos anteriores
+            clearChildContext(); 
             
             if (!childId) {
-                return; // No hay hijo seleccionado
+                return; 
             }
             const child = localChildren.find(c => c.id === childId);
             if (!child) return;
@@ -615,7 +619,7 @@
             localTotalPoints = child.totalPoints;
 
             setupChildFirestoreReferences(childId);
-            setupChildFirestoreListeners(); // Activa listeners para tasks y pending
+            setupChildFirestoreListeners(); 
         }
 
 
@@ -669,19 +673,17 @@
             }
             localTasks.sort((a, b) => a.name.localeCompare(b.name));
 
-            let tasksRendered = 0; // <-- Contador
+            let tasksRendered = 0; 
 
             localTasks.forEach(task => {
-                // *** LÓGICA DE RENDERIZADO MODIFICADA ***
                 const isPending = localPendingTasks.some(pt => pt.taskId === task.id);
                 const isOnCooldown = localTasksCooldown.some(ct => ct.taskId === task.id);
 
-                // Si la tarea ya fue aprobada hoy (en cooldown), no la mostramos.
                 if (isOnCooldown) {
-                    return; // No renderizar esta tarea
+                    return; 
                 }
 
-                tasksRendered++; // <-- Aumentar contador
+                tasksRendered++; 
 
                 const taskEl = document.createElement('div');
                 taskEl.className = `p-4 rounded-lg shadow flex justify-between items-center ${isPending ? 'bg-gray-200' : 'bg-white'}`;
@@ -704,7 +706,6 @@
                 containers.tasksList.appendChild(taskEl);
             });
 
-            // *** AÑADIDO: Mensaje si todas las tareas están en cooldown ***
             if (localTasks.length > 0 && tasksRendered === 0) {
                  containers.tasksList.innerHTML = '<p class="text-gray-500 text-center">¡Genial! Ya completaste todas tus tareas de hoy.</p>';
                  return;
@@ -898,7 +899,7 @@
         function renderPointsHistory() {
             if (!containers.pointsHistoryList) return;
             containers.pointsHistoryList.innerHTML = '';
-            if (!currentChildId) return; // No mostrar si no hay hijo
+            if (!currentChildId) return; 
             
             if (localPointsHistory.length === 0) {
                  containers.pointsHistoryList.innerHTML = '<p class="text-gray-500 text-center">Aún no hay historial.</p>';
@@ -923,7 +924,8 @@
             const points = localTotalPoints || 0;
             if (elements.totalPointsDisplay) elements.totalPointsDisplay.textContent = `${points}`;
             if (elements.totalPointsHeader) elements.totalPointsHeader.textContent = `${points} Pts`;
-            if (pages['page-redeem'] && !pages['page-redeem'].classList.contains('hidden') && localUserMode === 'child') {
+            
+            if (localUserMode === 'child') {
                 renderRewardsList();
             }
         }
@@ -932,7 +934,6 @@
         function startEditChild(id, name, gender) {
             currentEditingChildId = id;
             elements.editChildName.value = name;
-            // Marca el radio button correcto
             document.querySelector(`#form-edit-child input[name="edit-gender"][value="${gender}"]`).checked = true;
             forms['form-edit-child'].classList.remove('hidden');
             forms['form-add-child'].classList.add('hidden');
@@ -1038,8 +1039,6 @@
         }
         async function handleDeleteChild(childId, childName) {
             if (!childrenRef) return;
-            // TODO: Añadir confirmación
-            // TODO: Borrar subcolecciones (tasks, pendingTasks)
             showLoading(true);
             try { 
                 await deleteDoc(doc(db, childrenRef.path, childId)); 
@@ -1059,20 +1058,19 @@
             const points = parseInt(e.target['task-points'].value, 10);
             if (!name || points <= 0) return;
             
-            console.log('handleAddTask: Guardando tarea para childId:', currentChildId, { name, points }); // <-- LOG AÑADIDO
+            console.log('handleAddTask: Guardando tarea para childId:', currentChildId, { name, points }); 
 
             showLoading(true);
             try { 
-                // *** 1ª CORRECCIÓN APLICADA AQUÍ ***
                 await addDoc(tasksRef, { 
                     name, 
                     points, 
                     childId: currentChildId 
                 }); 
-                console.log('handleAddTask: Tarea guardada con éxito.'); // <-- LOG AÑADIDO
+                console.log('handleAddTask: Tarea guardada con éxito.'); 
                 e.target.reset(); 
             } 
-            catch (err) { console.error("Error al guardar tarea:", err); } // <-- Error log
+            catch (err) { console.error("Error al guardar tarea:", err); } 
             finally { showLoading(false); }
         }
         async function handleEditTaskSubmit(e) {
@@ -1166,7 +1164,7 @@
             showLoading(true);
             try { 
                 await addDoc(pendingTasksRef, { 
-                    taskId, // <-- TaskID es crucial
+                    taskId, 
                     name, 
                     points, 
                     requestedAt: serverTimestamp(),
@@ -1181,7 +1179,6 @@
             if (!currentChildId || !pendingTasksRef || !childrenRef || !tasksCooldownRef) return;
             showLoading(true);
             try {
-                // const newTotal = (localTotalPoints || 0) + points; // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
                 const pendingTask = localPendingTasks.find(pt => pt.id === id); 
@@ -1192,7 +1189,6 @@
                 }
                 
                 const batch = writeBatch(db);
-                // *** CAMBIO CRÍTICO: Usar increment() ***
                 batch.update(childDocRef, { totalPoints: increment(points) }); 
                 batch.delete(doc(db, pendingTasksRef.path, id)); 
                 
@@ -1224,11 +1220,9 @@
             if (localTotalPoints < cost || !currentChildId || !childrenRef || !redeemedRewardsRef) return;
             showLoading(true);
             try {
-                // const newTotal = localTotalPoints - cost; // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
                 const batch = writeBatch(db);
-                // *** CAMBIO CRÍTICO: Usar increment() ***
                 batch.update(childDocRef, { totalPoints: increment(-cost) }); 
                 
                 const newRef = doc(collection(db, redeemedRewardsRef.path));
@@ -1246,10 +1240,8 @@
             if (!currentChildId || !childrenRef) return;
             showLoading(true);
             try {
-                // const newTotal = (localTotalPoints || 0) - Math.abs(points); // <-- ELIMINADO
                 const childDocRef = doc(db, childrenRef.path, currentChildId);
                 
-                // *** CAMBIO CRÍTICO: Usar increment() ***
                 const pointsToDecrement = -Math.abs(points);
                 await updateDoc(childDocRef, { totalPoints: increment(pointsToDecrement) }); 
                 
@@ -1313,7 +1305,7 @@
                 if (doc.exists()) {
                     localLastReset = doc.data().lastReset || null;
                 } else { 
-                    const todayStr = getLocalDateString(); // <-- MODIFICADO (Usa hora local)
+                    const todayStr = getLocalDateString(); 
                     setDoc(familyDocRef, { adminId: currentUserId, lastReset: todayStr });
                     localLastReset = todayStr;
                 }
@@ -1337,6 +1329,17 @@
                     const myData = localChildren.find(c => c.id === currentChildId);
                     if (myData) {
                         localTotalPoints = myData.totalPoints;
+                        
+                        // *** ACTUALIZACIÓN DE NOMBRE EN RESTAURACIÓN DE SESIÓN ***
+                        // Si restauramos sesión, no teníamos el nombre. Aquí lo actualizamos.
+                        if (currentChildName === "Cargando..." || currentChildName !== myData.name) {
+                            currentChildName = myData.name;
+                            const genderEmoji = myData.gender === 'boy' ? '👦' : '👧';
+                            if (elements.childNameHeader) {
+                                elements.childNameHeader.textContent = `Hola, ${myData.name}! ${genderEmoji}`;
+                            }
+                        }
+
                         updatePointsDisplay();
                     } else {
                         logout(); // Me han borrado
@@ -1373,11 +1376,11 @@
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
-            if(tasksCooldownListener) tasksCooldownListener(); // <-- NUEVO
+            if(tasksCooldownListener) tasksCooldownListener(); 
 
-            console.log('setupChildFirestoreListeners: Configurando listeners para childId:', currentChildId); // <-- LOG AÑADIDO
+            console.log('setupChildFirestoreListeners: Configurando listeners para childId:', currentChildId); 
 
-            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef || !tasksCooldownRef) { // <-- NUEVO
+            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef || !tasksCooldownRef) { 
                 console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS, no se configuran listeners.', { currentChildId, tasksRef, pendingTasksRef, pointsHistoryRef, tasksCooldownRef });
                 return;
             }
@@ -1385,11 +1388,11 @@
             // Listener para Tareas del hijo (filtradas)
             const tasksQuery = query(tasksRef, where("childId", "==", currentChildId));
             tasksListener = onSnapshot(tasksQuery, (s) => {
-                console.log('tasksListener: Tareas recibidas:', s.docs.length); // <-- LOG AÑADIDO
+                console.log('tasksListener: Tareas recibidas:', s.docs.length); 
                 localTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderTasksList();
                 if(localUserMode === 'admin') renderActiveTasksEditList();
-            }, (error) => console.error("Error GRAVE en tasksListener:", error)); // <-- ERROR AÑADIDO
+            }, (error) => console.error("Error GRAVE en tasksListener:", error)); 
 
             // Listener para Pendientes del hijo (filtradas)
             const pendingQuery = query(pendingTasksRef, where("childId", "==", currentChildId));
@@ -1817,4 +1820,3 @@
     </div>
 </body>
 </html>
-
