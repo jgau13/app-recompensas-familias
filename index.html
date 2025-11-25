@@ -137,7 +137,7 @@
             pages = {
                 'page-login': document.getElementById('page-login'),
                 'page-pin-modal': document.getElementById('page-pin-modal'),
-                'page-change-pin-modal': document.getElementById('page-change-pin-modal'), // <-- Nuevo Modal
+                'page-change-pin-modal': document.getElementById('page-change-pin-modal'), 
                 'page-main': document.getElementById('page-main'),
                 'page-tasks': document.getElementById('page-tasks'),
                 'page-points': document.getElementById('page-points'),
@@ -154,10 +154,10 @@
                 'btn-show-email-login': document.getElementById('btn-show-email-login'),
                 'btn-show-email-register': document.getElementById('btn-show-email-register'),
                 'btn-logout': document.getElementById('btn-logout'),
-                'btn-change-pin': document.getElementById('btn-change-pin'), // <-- Nuevo botón
+                'btn-change-pin': document.getElementById('btn-change-pin'), 
                 'btn-pin-validate': document.getElementById('btn-pin-validate'),
                 'btn-pin-cancel': document.getElementById('btn-pin-cancel'),
-                'btn-change-pin-cancel': document.getElementById('btn-change-pin-cancel'), // <-- Nuevo
+                'btn-change-pin-cancel': document.getElementById('btn-change-pin-cancel'), 
                 'btn-tasks': document.getElementById('btn-tasks'),
                 'btn-points': document.getElementById('btn-points'),
                 'btn-evaluate': document.getElementById('btn-evaluate'),
@@ -181,6 +181,7 @@
                 penaltiesApplyList: document.getElementById('penalties-apply-list-container'),
                 penaltiesEditList: document.getElementById('penalties-edit-list-container'),
                 childrenEditList: document.getElementById('children-edit-list-container'),
+                taskAssignmentCheckboxes: document.getElementById('task-assignment-checkboxes'), // <-- NUEVO
                 pointsHistoryList: document.getElementById('points-history-list')
             };
 
@@ -188,7 +189,7 @@
                 'form-email-login': document.getElementById('form-email-login'),
                 'form-email-register': document.getElementById('form-email-register'),
                 'form-pin': document.getElementById('form-pin'),
-                'form-change-pin': document.getElementById('form-change-pin'), // <-- Nuevo
+                'form-change-pin': document.getElementById('form-change-pin'), 
                 'form-add-child': document.getElementById('form-add-child'),
                 'form-edit-child': document.getElementById('form-edit-child'),
                 'form-add-task': document.getElementById('form-add-task'),
@@ -209,9 +210,9 @@
                 pinInput: document.getElementById('pin-input'),
                 pinError: document.getElementById('pin-error'),
                 
-                newPinInput: document.getElementById('new-pin-input'), // <-- Nuevo
-                confirmPinInput: document.getElementById('confirm-pin-input'), // <-- Nuevo
-                changePinError: document.getElementById('change-pin-error'), // <-- Nuevo
+                newPinInput: document.getElementById('new-pin-input'), 
+                confirmPinInput: document.getElementById('confirm-pin-input'), 
+                changePinError: document.getElementById('change-pin-error'), 
 
                 editChildName: document.getElementById('edit-child-name'),
                 editChildGender: document.getElementById('edit-child-gender'),
@@ -247,7 +248,7 @@
             
             // Navegación principal
             buttons['btn-logout'].addEventListener('click', logout);
-            buttons['btn-change-pin'].addEventListener('click', () => showPage('page-change-pin-modal')); // <-- Nuevo listener
+            buttons['btn-change-pin'].addEventListener('click', () => showPage('page-change-pin-modal')); 
             buttons['btn-tasks'].addEventListener('click', () => showPage('page-tasks'));
             buttons['btn-points'].addEventListener('click', () => showPage('page-points'));
             buttons['btn-evaluate'].addEventListener('click', () => showPage('page-evaluate'));
@@ -423,11 +424,12 @@
             localStorage.removeItem('app_child_id');
 
             clearChildContext(); 
-            // setupGlobal... ya se llaman en el AuthListener, pero no hace daño asegurar
-            // setupGlobalFirestoreReferences(adminUserId); 
-            // setupGlobalFirestoreListeners(); 
 
             updateAdminUI('admin');
+            
+            populateAdminSelects(); // Force population of selects when entering admin mode
+            renderChildCheckboxes(); // <-- NUEVO: Renderizar checkboxes al entrar en modo admin
+            
             showPage('page-main');
             showLoading(false);
         }
@@ -657,6 +659,35 @@
                     select.appendChild(option);
                 });
                 select.value = currentValue; 
+            });
+        }
+
+        // *** NUEVA FUNCIÓN PARA CHECKBOXES ***
+        function renderChildCheckboxes() {
+            if (!containers.taskAssignmentCheckboxes) return;
+            containers.taskAssignmentCheckboxes.innerHTML = '';
+            
+            if (localChildren.length === 0) {
+                containers.taskAssignmentCheckboxes.innerHTML = '<p class="text-gray-500 text-sm">No tienes hijos registrados.</p>';
+                return;
+            }
+
+            localChildren.forEach(child => {
+                const label = document.createElement('label');
+                label.className = 'flex items-center gap-2 p-2 border rounded-lg cursor-pointer hover:bg-blue-50';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.name = 'child-assign';
+                checkbox.value = child.id;
+                checkbox.className = 'w-5 h-5 text-blue-600 rounded focus:ring-blue-500';
+                
+                const span = document.createElement('span');
+                span.textContent = child.name;
+                
+                label.appendChild(checkbox);
+                label.appendChild(span);
+                containers.taskAssignmentCheckboxes.appendChild(label);
             });
         }
 
@@ -1102,32 +1133,53 @@
             finally { showLoading(false); }
         }
 
-        // Gestión de Tareas (por hijo)
+        // Gestión de Tareas (por hijo) - AHORA BATCH
         async function handleAddTask(e) {
             e.preventDefault();
-            if (!currentChildId || !tasksRef) {
-                alert("Selecciona un hijo primero.");
+            if (!tasksRef) {
                 return;
             }
+            
             const name = e.target['task-name'].value;
             const points = parseInt(e.target['task-points'].value, 10);
-            if (!name || points <= 0) return;
             
-            console.log('handleAddTask: Guardando tarea para childId:', currentChildId, { name, points }); 
+            // Obtener hijos seleccionados
+            const checkboxes = document.querySelectorAll('input[name="child-assign"]:checked');
+            const selectedChildIds = Array.from(checkboxes).map(cb => cb.value);
 
+            if (!name || points <= 0) {
+                alert("Por favor ingresa nombre y puntos válidos.");
+                return;
+            }
+
+            if (selectedChildIds.length === 0) {
+                alert("Por favor selecciona al menos un hijo.");
+                return;
+            }
+            
             showLoading(true);
             try { 
-                await addDoc(tasksRef, { 
-                    name, 
-                    points, 
-                    childId: currentChildId 
-                }); 
-                console.log('handleAddTask: Tarea guardada con éxito.'); 
+                const batch = writeBatch(db);
+                
+                selectedChildIds.forEach(childId => {
+                    const newTaskRef = doc(tasksRef); // Auto-ID
+                    batch.set(newTaskRef, { 
+                        name, 
+                        points, 
+                        childId: childId 
+                    });
+                });
+
+                await batch.commit();
+                console.log('handleAddTask: Tareas guardadas con éxito para:', selectedChildIds); 
                 e.target.reset(); 
+                // Resetear checkboxes
+                document.querySelectorAll('input[name="child-assign"]').forEach(cb => cb.checked = false);
             } 
             catch (err) { console.error("Error al guardar tarea:", err); } 
             finally { showLoading(false); }
         }
+
         async function handleEditTaskSubmit(e) {
             e.preventDefault();
             if (!currentEditingTaskId || !tasksRef) return;
@@ -1387,7 +1439,10 @@
                 localChildren = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderChildLoginList();
                 renderChildrenEditList();
-                if(localUserMode === 'admin') populateAdminSelects();
+                if(localUserMode === 'admin') {
+                    populateAdminSelects();
+                    renderChildCheckboxes(); // Update checkboxes when children list changes
+                }
                 
                 // Si estoy logueado como hijo, actualiza mis puntos
                 if(localUserMode === 'child' && currentChildId) {
@@ -1784,29 +1839,41 @@
                 <h1 class="text-3xl font-bold text-blue-600 ml-4">Gestionar Tareas</h1>
             </header>
 
+            <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Crear Nueva Tarea</h2>
+                <form id="form-add-task" class="space-y-4">
+                    <input type="text" id="task-name" name="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
+                    <input type="number" id="task-points" name="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
+                    
+                    <div class="space-y-2">
+                        <label class="block text-sm font-bold text-gray-700">Asignar a:</label>
+                        <div id="task-assignment-checkboxes" class="grid grid-cols-2 gap-2">
+                            <!-- Checkboxes will be populated here -->
+                        </div>
+                    </div>
+
+                    <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Crear y Asignar</button>
+                </form>
+            </div>
+
+            <div class="my-6 border-t-2 border-gray-200"></div>
+
             <div class="mb-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-2">Ver/Editar Tareas por Hijo</h2>
                 <label for="child-select-tasks" class="block text-sm font-medium text-gray-700 mb-2">Selecciona un hijo:</label>
                 <select id="child-select-tasks" class="w-full p-3 border rounded-lg"></select>
             </div>
 
-            <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Añadir Tarea (para el hijo sel.)</h2>
-                <form id="form-add-task" class="space-y-3">
-                    <input type="text" id="task-name" name="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
-                    <input type="number" id="task-points" name="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
-                    <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Guardar</button>
-                </form>
-                
-                <form id="form-edit-task" class="hidden space-y-3 bg-blue-50 p-3 rounded-lg mt-3 border border-blue-200">
-                    <p class="font-bold text-blue-800">Editando Tarea:</p>
-                    <input type="text" id="edit-task-name" class="w-full p-3 border rounded-lg" required>
-                    <input type="number" id="edit-task-points" class="w-full p-3 border rounded-lg" required>
-                    <div class="flex gap-2">
-                        <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
-                        <button type="button" id="btn-edit-task-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
-                    </div>
-                </form>
-            </div>
+            
+            <form id="form-edit-task" class="hidden space-y-3 bg-blue-50 p-3 rounded-lg mt-3 border border-blue-200">
+                <p class="font-bold text-blue-800">Editando Tarea:</p>
+                <input type="text" id="edit-task-name" class="w-full p-3 border rounded-lg" required>
+                <input type="number" id="edit-task-points" class="w-full p-3 border rounded-lg" required>
+                <div class="flex gap-2">
+                    <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
+                    <button type="button" id="btn-edit-task-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+                </div>
+            </form>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
                 <h2 class="text-xl font-bold text-gray-800 mb-4">Lista de Tareas (del hijo sel.)</h2>
