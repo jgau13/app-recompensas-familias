@@ -53,8 +53,8 @@
         
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'multi-family-reward-app';
         
-        // --- CÓDIGO PIN (Admin) ---
-        const ADMIN_PIN = '0708'; 
+        // --- CÓDIGO PIN (Default) ---
+        const DEFAULT_PIN = '0000'; 
 
         // *** HELPER FECHAS ***
         function getLocalDateString() {
@@ -75,6 +75,7 @@
         let localUserMode = 'unknown'; 
         let currentChildId = null; 
         let currentChildName = ""; 
+        let localAdminPin = DEFAULT_PIN; // PIN actual en memoria
         
         let localChildren = [];
         let localTasks = [];
@@ -136,6 +137,7 @@
             pages = {
                 'page-login': document.getElementById('page-login'),
                 'page-pin-modal': document.getElementById('page-pin-modal'),
+                'page-change-pin-modal': document.getElementById('page-change-pin-modal'), // <-- Nuevo Modal
                 'page-main': document.getElementById('page-main'),
                 'page-tasks': document.getElementById('page-tasks'),
                 'page-points': document.getElementById('page-points'),
@@ -152,8 +154,10 @@
                 'btn-show-email-login': document.getElementById('btn-show-email-login'),
                 'btn-show-email-register': document.getElementById('btn-show-email-register'),
                 'btn-logout': document.getElementById('btn-logout'),
+                'btn-change-pin': document.getElementById('btn-change-pin'), // <-- Nuevo botón
                 'btn-pin-validate': document.getElementById('btn-pin-validate'),
                 'btn-pin-cancel': document.getElementById('btn-pin-cancel'),
+                'btn-change-pin-cancel': document.getElementById('btn-change-pin-cancel'), // <-- Nuevo
                 'btn-tasks': document.getElementById('btn-tasks'),
                 'btn-points': document.getElementById('btn-points'),
                 'btn-evaluate': document.getElementById('btn-evaluate'),
@@ -184,6 +188,7 @@
                 'form-email-login': document.getElementById('form-email-login'),
                 'form-email-register': document.getElementById('form-email-register'),
                 'form-pin': document.getElementById('form-pin'),
+                'form-change-pin': document.getElementById('form-change-pin'), // <-- Nuevo
                 'form-add-child': document.getElementById('form-add-child'),
                 'form-edit-child': document.getElementById('form-edit-child'),
                 'form-add-task': document.getElementById('form-add-task'),
@@ -204,6 +209,10 @@
                 pinInput: document.getElementById('pin-input'),
                 pinError: document.getElementById('pin-error'),
                 
+                newPinInput: document.getElementById('new-pin-input'), // <-- Nuevo
+                confirmPinInput: document.getElementById('confirm-pin-input'), // <-- Nuevo
+                changePinError: document.getElementById('change-pin-error'), // <-- Nuevo
+
                 editChildName: document.getElementById('edit-child-name'),
                 editChildGender: document.getElementById('edit-child-gender'),
                 editChildCancel: document.getElementById('btn-edit-child-cancel'),
@@ -238,6 +247,7 @@
             
             // Navegación principal
             buttons['btn-logout'].addEventListener('click', logout);
+            buttons['btn-change-pin'].addEventListener('click', () => showPage('page-change-pin-modal')); // <-- Nuevo listener
             buttons['btn-tasks'].addEventListener('click', () => showPage('page-tasks'));
             buttons['btn-points'].addEventListener('click', () => showPage('page-points'));
             buttons['btn-evaluate'].addEventListener('click', () => showPage('page-evaluate'));
@@ -256,9 +266,16 @@
                 });
             });
 
-            // PIN Modal
+            // PIN Modal (Entrada)
             forms['form-pin'].addEventListener('submit', handlePinValidate);
             buttons['btn-pin-cancel'].addEventListener('click', () => showPage('page-main'));
+
+            // PIN Modal (Cambio)
+            forms['form-change-pin'].addEventListener('submit', handleChangePinSubmit);
+            buttons['btn-change-pin-cancel'].addEventListener('click', () => {
+                forms['form-change-pin'].reset();
+                showPage('page-main');
+            });
 
             // Listener para el nuevo botón de "Salir a Admin" (Candado)
             buttons['btn-exit-child-mode'].addEventListener('click', handleShowPinModal);
@@ -296,7 +313,7 @@
                     
                     // Configurar referencias globales (necesarias para ambos modos)
                     setupGlobalFirestoreReferences(user.uid);
-                    setupGlobalFirestoreListeners(); // Esto trae la lista de hijos
+                    setupGlobalFirestoreListeners(); // Esto trae la lista de hijos y el PIN
 
                     // *** LÓGICA DE PERSISTENCIA DE SESIÓN ***
                     const savedMode = localStorage.getItem('app_user_mode');
@@ -445,12 +462,49 @@
         function handlePinValidate(e) {
             e.preventDefault();
             const pin = elements.pinInput.value;
-            if (pin === ADMIN_PIN) { 
+            // Validamos contra el PIN local (que viene de la DB)
+            if (pin === localAdminPin) { 
                 elements.pinInput.value = '';
                 elements.pinError.classList.add('hidden');
                 setAdminMode(currentUserId); // Cambia a admin y actualiza localStorage
             } else {
                 elements.pinError.classList.remove('hidden');
+            }
+        }
+
+        async function handleChangePinSubmit(e) {
+            e.preventDefault();
+            const newPin = elements.newPinInput.value;
+            const confirmPin = elements.confirmPinInput.value;
+            
+            if (newPin.length !== 4 || isNaN(newPin)) {
+                elements.changePinError.textContent = "El PIN debe ser de 4 dígitos.";
+                elements.changePinError.classList.remove('hidden');
+                return;
+            }
+
+            if (newPin !== confirmPin) {
+                elements.changePinError.textContent = "Los PINs no coinciden.";
+                elements.changePinError.classList.remove('hidden');
+                return;
+            }
+
+            showLoading(true);
+            try {
+                // Guardar en Firebase
+                await setDoc(familyDocRef, { pin: newPin }, { merge: true });
+                localAdminPin = newPin; // Actualizar localmente inmediatamente
+                
+                forms['form-change-pin'].reset();
+                elements.changePinError.classList.add('hidden');
+                showPage('page-main');
+                alert("PIN actualizado correctamente.");
+            } catch (err) {
+                console.error("Error al cambiar PIN:", err);
+                elements.changePinError.textContent = "Error al guardar. Intenta de nuevo.";
+                elements.changePinError.classList.remove('hidden');
+            } finally {
+                showLoading(false);
             }
         }
 
@@ -512,6 +566,7 @@
             currentUserId = null;
             currentChildId = null;
             currentChildName = "";
+            localAdminPin = DEFAULT_PIN; // Reset PIN to default
             localChildren = [];
             localTasks = [];
             localPendingTasks = [];
@@ -1304,9 +1359,19 @@
             familyDocListener = onSnapshot(familyDocRef, (doc) => {
                 if (doc.exists()) {
                     localLastReset = doc.data().lastReset || null;
+                    
+                    // *** NUEVO: LEER PIN DEL DOCUMENTO ***
+                    if (doc.data().pin) {
+                        localAdminPin = doc.data().pin;
+                    }
                 } else { 
                     const todayStr = getLocalDateString(); 
-                    setDoc(familyDocRef, { adminId: currentUserId, lastReset: todayStr });
+                    // Guardar PIN default al crear
+                    setDoc(familyDocRef, { 
+                        adminId: currentUserId, 
+                        lastReset: todayStr,
+                        pin: DEFAULT_PIN 
+                    });
                     localLastReset = todayStr;
                 }
                 
@@ -1520,6 +1585,21 @@
             </div>
         </div>
 
+        <!-- === Modal de Cambio de PIN === -->
+        <div id="page-change-pin-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex justify-center items-center z-40 p-4">
+            <div class="bg-white p-6 rounded-2xl shadow-2xl w-full max-w-sm">
+                <h2 class="text-2xl font-bold text-center text-gray-800 mb-4">Cambiar PIN</h2>
+                <p class="text-center text-gray-600 mb-6">Ingresa el nuevo PIN de 4 dígitos.</p>
+                <form id="form-change-pin" class="space-y-4">
+                    <input type="password" id="new-pin-input" pattern="[0-9]*" inputmode="numeric" maxlength="4" placeholder="Nuevo PIN" class="w-full p-4 text-3xl text-center tracking-widest border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-blue-500" required>
+                    <input type="password" id="confirm-pin-input" pattern="[0-9]*" inputmode="numeric" maxlength="4" placeholder="Confirmar PIN" class="w-full p-4 text-3xl text-center tracking-widest border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-blue-500" required>
+                    <p id="change-pin-error" class="text-red-500 text-center hidden"></p>
+                    <button type="submit" class="w-full bg-blue-500 text-white p-4 rounded-lg font-bold text-lg hover:bg-blue-600 transition-colors">Guardar Nuevo PIN</button>
+                    <button type="button" id="btn-change-pin-cancel" class="w-full bg-gray-200 text-gray-700 p-3 rounded-lg font-bold hover:bg-gray-300 transition-colors">Cancelar</button>
+                </form>
+            </div>
+        </div>
+
         <!-- === Página Principal (Admin o Selección de Hijo) === -->
         <div id="page-main" class="hidden">
             <header class="flex justify-between items-center mb-8 mt-4">
@@ -1532,7 +1612,10 @@
                     <div id="total-points-header" class="text-2xl font-bold text-yellow-500 mt-1 child-only">...</div>
                 </div>
                 <!-- Botón de Salir (Admin) -->
-                <button id="btn-logout" class="hidden bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
+                <div class="flex gap-2 admin-only">
+                    <button id="btn-change-pin" class="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-blue-200">🔑 PIN</button>
+                    <button id="btn-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
+                </div>
                 
                 <!-- *** NUEVO BOTÓN: Salir a Admin (Hijo) *** -->
                 <button id="btn-exit-child-mode" class="child-only text-3xl p-2 rounded-full hover:bg-gray-200 hidden">🔒</button>
@@ -1820,4 +1903,3 @@
     </div>
 </body>
 </html>
-
