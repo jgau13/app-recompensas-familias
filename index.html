@@ -86,11 +86,17 @@
         let localPointsHistory = [];
         let localTotalPoints = 0; 
         let localLastReset = null; 
+        let localFamilyTasks = []; 
 
         let currentEditingTaskId = null;
         let currentEditingPenaltyId = null;
         let currentEditingRewardId = null; 
         let currentEditingChildId = null; 
+        
+        // Variables para edición global
+        let isEditingGlobal = false;
+        let editingGlobalOriginalName = "";
+
         let hasInitialDataLoaded = false; 
 
         // --- Elementos del DOM ---
@@ -111,6 +117,7 @@
         let pointsHistoryListener = null;
         let redeemedRewardsListener = null;
         let familyDocListener = null;
+        let allTasksListener = null; 
 
         document.addEventListener('DOMContentLoaded', async () => {
             cacheDOMElements();
@@ -167,6 +174,8 @@
                 'btn-manage-children': document.getElementById('btn-manage-children'),
                 'btn-manage-tasks': document.getElementById('btn-manage-tasks'),
                 'btn-exit-child-mode': document.getElementById('btn-exit-child-mode'),
+                'btn-save-global-tasks': document.getElementById('btn-save-global-tasks'),
+                'btn-cancel-edit-global-task': document.getElementById('btn-cancel-edit-global-task'),
                 back: document.querySelectorAll('.btn-back')
             };
 
@@ -181,7 +190,8 @@
                 penaltiesApplyList: document.getElementById('penalties-apply-list-container'),
                 penaltiesEditList: document.getElementById('penalties-edit-list-container'),
                 childrenEditList: document.getElementById('children-edit-list-container'),
-                taskAssignmentCheckboxes: document.getElementById('task-assignment-checkboxes'), // <-- NUEVO
+                taskAssignmentCheckboxes: document.getElementById('task-assignment-checkboxes'), 
+                globalTasksSummary: document.getElementById('global-tasks-summary'), 
                 pointsHistoryList: document.getElementById('points-history-list')
             };
 
@@ -193,7 +203,6 @@
                 'form-add-child': document.getElementById('form-add-child'),
                 'form-edit-child': document.getElementById('form-edit-child'),
                 'form-add-task': document.getElementById('form-add-task'),
-                'form-edit-task': document.getElementById('form-edit-task'),
                 'form-add-reward': document.getElementById('form-add-reward'),
                 'form-edit-reward': document.getElementById('form-edit-reward'), 
                 'form-add-penalty': document.getElementById('form-add-penalty'),
@@ -218,10 +227,13 @@
                 editChildGender: document.getElementById('edit-child-gender'),
                 editChildCancel: document.getElementById('btn-edit-child-cancel'),
                 
-                editTaskName: document.getElementById('edit-task-name'),
-                editTaskPoints: document.getElementById('edit-task-points'),
-                editTaskCancel: document.getElementById('btn-edit-task-cancel'),
-                
+                // Elementos del form de tareas global
+                addTaskTitle: document.getElementById('add-task-title'),
+                addTaskSubmitBtn: document.getElementById('add-task-submit-btn'),
+                editTaskCancelContainer: document.getElementById('edit-task-cancel-container'),
+                taskNameInput: document.getElementById('task-name'),
+                taskPointsInput: document.getElementById('task-points'),
+
                 editPenaltyName: document.getElementById('edit-penalty-name'),
                 editPenaltyPoints: document.getElementById('edit-penalty-points'),
                 editPenaltyCancel: document.getElementById('btn-edit-penalty-cancel'),
@@ -233,8 +245,7 @@
 
             selects = {
                 'child-select-evaluate': document.getElementById('child-select-evaluate'),
-                'child-select-penalties': document.getElementById('child-select-penalties'),
-                'child-select-tasks': document.getElementById('child-select-tasks')
+                'child-select-penalties': document.getElementById('child-select-penalties')
             };
         }
 
@@ -262,6 +273,7 @@
                 btn.addEventListener('click', () => {
                     if (localUserMode === 'admin') {
                         clearAdminSelects();
+                        resetGlobalTaskForm(); // Limpiar form al salir
                     }
                     showPage('page-main');
                 });
@@ -287,9 +299,10 @@
             forms['form-edit-child'].addEventListener('submit', handleEditChildSubmit);
             elements.editChildCancel.addEventListener('click', cancelEditChild);
             
-            forms['form-add-task'].addEventListener('submit', handleAddTask);
-            forms['form-edit-task'].addEventListener('submit', handleEditTaskSubmit);
-            elements.editTaskCancel.addEventListener('click', cancelEditTask);
+            // Form de Tareas (Global)
+            forms['form-add-task'].addEventListener('submit', handleAddOrUpdateTask);
+            buttons['btn-save-global-tasks'].addEventListener('click', handleSaveGlobalTasks); 
+            buttons['btn-cancel-edit-global-task'].addEventListener('click', resetGlobalTaskForm);
 
             forms['form-add-reward'].addEventListener('submit', handleAddReward);
             forms['form-edit-reward'].addEventListener('submit', handleEditRewardSubmit); 
@@ -301,7 +314,6 @@
             // Selects
             selects['child-select-evaluate'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'evaluate'));
             selects['child-select-penalties'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'penalties'));
-            selects['child-select-tasks'].addEventListener('change', (e) => setupAdminPageContext(e.target.value, 'tasks'));
         }
 
         // --- Lógica de Autenticación ---
@@ -309,31 +321,22 @@
         function setupAuthListener() {
             onAuthStateChanged(auth, (user) => {
                 if (user) {
-                    // Usuario logueado
                     currentUserId = user.uid;
-                    
-                    // Configurar referencias globales (necesarias para ambos modos)
                     setupGlobalFirestoreReferences(user.uid);
-                    setupGlobalFirestoreListeners(); // Esto trae la lista de hijos y el PIN
+                    setupGlobalFirestoreListeners(); 
 
-                    // *** LÓGICA DE PERSISTENCIA DE SESIÓN ***
                     const savedMode = localStorage.getItem('app_user_mode');
                     const savedChildId = localStorage.getItem('app_child_id');
 
                     if (savedMode === 'child' && savedChildId) {
-                        console.log("Restaurando sesión de hijo:", savedChildId);
-                        // Restaurar modo hijo directamente
-                        // Nota: El nombre y puntos se actualizarán cuando el listener de 'childrenRef' descargue los datos
                         setChildMode(savedChildId, "Cargando...", 0, "girl"); 
                     } else {
-                        // Modo Admin por defecto
                         setAdminMode(user.uid);
                     }
                 } else {
-                    // No logueado
                     currentUserId = null;
                     clearAllListeners();
-                    localStorage.removeItem('app_user_mode'); // Limpiar sesión
+                    localStorage.removeItem('app_user_mode'); 
                     localStorage.removeItem('app_child_id');
                     showPage('page-login');
                     showLoading(false);
@@ -389,7 +392,7 @@
         async function logout() {
             showLoading(true);
             clearAllData(); 
-            localStorage.clear(); // Limpiar todo al salir
+            localStorage.clear(); 
             await signOut(auth);
         }
 
@@ -419,7 +422,6 @@
             localUserMode = 'admin';
             currentUserId = adminUserId; 
             
-            // Persistencia
             localStorage.setItem('app_user_mode', 'admin');
             localStorage.removeItem('app_child_id');
 
@@ -427,8 +429,9 @@
 
             updateAdminUI('admin');
             
-            populateAdminSelects(); // Force population of selects when entering admin mode
-            renderChildCheckboxes(); // <-- NUEVO: Renderizar checkboxes al entrar en modo admin
+            populateAdminSelects(); 
+            renderChildCheckboxes(); 
+            renderAllTasksSummary(); 
             
             showPage('page-main');
             showLoading(false);
@@ -440,7 +443,6 @@
             currentChildName = childName;
             localTotalPoints = points;
             
-            // Persistencia
             localStorage.setItem('app_user_mode', 'child');
             localStorage.setItem('app_child_id', childId);
 
@@ -468,7 +470,7 @@
             if (pin === localAdminPin) { 
                 elements.pinInput.value = '';
                 elements.pinError.classList.add('hidden');
-                setAdminMode(currentUserId); // Cambia a admin y actualiza localStorage
+                setAdminMode(currentUserId); 
             } else {
                 elements.pinError.classList.remove('hidden');
             }
@@ -493,9 +495,8 @@
 
             showLoading(true);
             try {
-                // Guardar en Firebase
                 await setDoc(familyDocRef, { pin: newPin }, { merge: true });
-                localAdminPin = newPin; // Actualizar localmente inmediatamente
+                localAdminPin = newPin; 
                 
                 forms['form-change-pin'].reset();
                 elements.changePinError.classList.add('hidden');
@@ -535,7 +536,6 @@
             const today = getLocalDateString(); 
             
             if (localLastReset && localLastReset !== today) {
-                console.log(`REINICIO DIARIO: Hoy es ${today}, último reseteo fue ${localLastReset}. Limpiando...`);
                 showLoading(true);
                 try {
                     const batch = writeBatch(db);
@@ -568,7 +568,7 @@
             currentUserId = null;
             currentChildId = null;
             currentChildName = "";
-            localAdminPin = DEFAULT_PIN; // Reset PIN to default
+            localAdminPin = DEFAULT_PIN; 
             localChildren = [];
             localTasks = [];
             localPendingTasks = [];
@@ -579,6 +579,9 @@
             localTotalPoints = 0;
             localLastReset = null;
             hasInitialDataLoaded = false;
+            localFamilyTasks = []; 
+            isEditingGlobal = false;
+            editingGlobalOriginalName = "";
         }
 
         function clearAllListeners() {
@@ -587,6 +590,7 @@
             if (rewardsListener) rewardsListener();
             if (penaltiesListener) penaltiesListener();
             if (redeemedRewardsListener) redeemedRewardsListener();
+            if (allTasksListener) allTasksListener(); 
             clearChildContext();
         }
 
@@ -611,7 +615,6 @@
             renderTasksList();
             renderPendingTasksList();
             renderPointsHistory();
-            renderActiveTasksEditList();
         }
         
         function clearAdminSelects() {
@@ -644,8 +647,7 @@
         function populateAdminSelects() {
             const selectsToPopulate = [
                 selects['child-select-evaluate'],
-                selects['child-select-penalties'],
-                selects['child-select-tasks']
+                selects['child-select-penalties']
             ];
             
             selectsToPopulate.forEach(select => {
@@ -662,8 +664,8 @@
             });
         }
 
-        // *** NUEVA FUNCIÓN PARA CHECKBOXES ***
-        function renderChildCheckboxes() {
+        // *** CHECKBOXES ***
+        function renderChildCheckboxes(assignedChildIds = []) {
             if (!containers.taskAssignmentCheckboxes) return;
             containers.taskAssignmentCheckboxes.innerHTML = '';
             
@@ -681,6 +683,10 @@
                 checkbox.name = 'child-assign';
                 checkbox.value = child.id;
                 checkbox.className = 'w-5 h-5 text-blue-600 rounded focus:ring-blue-500';
+                // Si estamos en modo edición, marcar los que ya la tienen
+                if (assignedChildIds.includes(child.id)) {
+                    checkbox.checked = true;
+                }
                 
                 const span = document.createElement('span');
                 span.textContent = child.name;
@@ -689,6 +695,305 @@
                 label.appendChild(span);
                 containers.taskAssignmentCheckboxes.appendChild(label);
             });
+        }
+
+        // *** RESUMEN GLOBAL DE TAREAS (CON ICONOS) ***
+        function renderAllTasksSummary() {
+            if (!containers.globalTasksSummary) return;
+            containers.globalTasksSummary.innerHTML = '';
+            
+            if (localFamilyTasks.length === 0) {
+                containers.globalTasksSummary.innerHTML = '<p class="text-gray-500 text-sm">No hay tareas creadas.</p>';
+                return;
+            }
+
+            const grouped = {};
+            localFamilyTasks.forEach(task => {
+                const key = task.name.trim().toLowerCase(); 
+                if (!grouped[key]) {
+                    grouped[key] = {
+                        originalName: task.name,
+                        points: task.points,
+                        assignedChildIds: [] 
+                    };
+                }
+                grouped[key].assignedChildIds.push(task.childId);
+            });
+
+            Object.values(grouped).forEach(group => {
+                const card = document.createElement('div');
+                card.className = 'bg-white p-4 rounded-lg shadow border border-gray-200 mb-3 global-task-card';
+                card.dataset.taskName = group.originalName;
+                card.dataset.points = group.points;
+                
+                let checkboxesHTML = '';
+                let assignedCount = 0;
+
+                localChildren.forEach(child => {
+                    const isAssigned = group.assignedChildIds.includes(child.id);
+                    const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
+                    if (isAssigned) assignedCount++;
+                    
+                    checkboxesHTML += `
+                        <label class="inline-flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border cursor-pointer hover:bg-gray-100">
+                            <input type="checkbox" 
+                                   class="task-child-checkbox w-4 h-4 text-blue-600 rounded focus:ring-blue-500" 
+                                   value="${child.id}" 
+                                   ${isAssigned ? 'checked' : ''}
+                                   data-task-name="${group.originalName}"
+                            >
+                            <span class="text-sm">${genderEmoji} ${child.name}</span>
+                        </label>
+                    `;
+                });
+
+                // Texto de asignación
+                let statusText = "";
+                if (assignedCount === 0) {
+                     statusText = '<span class="text-xs text-orange-500 font-medium ml-2">Sin asignar</span>';
+                }
+
+                card.innerHTML = `
+                    <div class="mb-2 border-b pb-2 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-gray-800 text-lg inline-block">${group.originalName}</h3>
+                            <span class="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full ml-2">${group.points} pts</span>
+                            ${statusText}
+                        </div>
+                        <div class="flex gap-2">
+                            <button class="btn-edit-global bg-blue-100 p-2 rounded-full text-blue-600 hover:bg-blue-200" title="Editar Tarea">✏️</button>
+                            <button class="btn-delete-global bg-red-100 p-2 rounded-full text-red-600 hover:bg-red-200" title="Eliminar Tarea">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        ${checkboxesHTML}
+                    </div>
+                `;
+                
+                // Listeners para los botones
+                card.querySelector('.btn-edit-global').addEventListener('click', () => startEditGlobalTask(group.originalName, group.points, group.assignedChildIds));
+                card.querySelector('.btn-delete-global').addEventListener('click', () => deleteGlobalTask(group.originalName));
+
+                containers.globalTasksSummary.appendChild(card);
+            });
+            
+            if (Object.keys(grouped).length > 0) {
+                buttons['btn-save-global-tasks'].classList.remove('hidden');
+            } else {
+                buttons['btn-save-global-tasks'].classList.add('hidden');
+            }
+        }
+
+        // --- LÓGICA DE EDICIÓN GLOBAL ---
+
+        function startEditGlobalTask(name, points, assignedChildIds) {
+            isEditingGlobal = true;
+            editingGlobalOriginalName = name;
+            
+            // Poblar formulario
+            elements.addTaskTitle.textContent = `Editando: ${name}`;
+            elements.taskNameInput.value = name;
+            elements.taskPointsInput.value = points;
+            elements.addTaskSubmitBtn.textContent = "Actualizar Tarea";
+            elements.addTaskSubmitBtn.classList.replace('bg-blue-500', 'bg-green-500');
+            
+            // Mostrar botón cancelar
+            elements.editTaskCancelContainer.classList.remove('hidden');
+            
+            // Renderizar checkboxes con los asignados (incluyendo nulos si se desea, pero aquí mostramos hijos reales)
+            // Filtramos los nulls de assignedChildIds antes de pasar
+            const validAssignedIds = assignedChildIds.filter(id => id !== null);
+            renderChildCheckboxes(validAssignedIds);
+            
+            // Scroll hacia arriba suavemente
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function resetGlobalTaskForm() {
+            isEditingGlobal = false;
+            editingGlobalOriginalName = "";
+            
+            forms['form-add-task'].reset();
+            
+            elements.addTaskTitle.textContent = "Crear Nueva Tarea";
+            elements.addTaskSubmitBtn.textContent = "Crear y Asignar";
+            elements.addTaskSubmitBtn.classList.replace('bg-green-500', 'bg-blue-500');
+            elements.editTaskCancelContainer.classList.add('hidden');
+            
+            renderChildCheckboxes(); // Limpiar selección
+        }
+
+        async function handleAddOrUpdateTask(e) {
+            e.preventDefault();
+            if (!tasksRef) return;
+
+            const name = elements.taskNameInput.value.trim();
+            const points = parseInt(elements.taskPointsInput.value, 10);
+            
+            const checkboxes = document.querySelectorAll('#task-assignment-checkboxes input[type="checkbox"]:checked');
+            const selectedChildIds = Array.from(checkboxes).map(cb => cb.value);
+
+            if (!name || points <= 0) {
+                alert("Nombre o puntos inválidos.");
+                return;
+            }
+            
+            // MODIFICACIÓN: Permitir 0 seleccionados (crear placeholder)
+
+            showLoading(true);
+            const batch = writeBatch(db);
+
+            try {
+                if (isEditingGlobal) {
+                    // === MODO ACTUALIZAR ===
+                    const tasksToUpdate = localFamilyTasks.filter(t => t.name.trim().toLowerCase() === editingGlobalOriginalName.trim().toLowerCase());
+                    const existingChildIds = tasksToUpdate.map(t => t.childId);
+
+                    // Borrar existentes que ya no están
+                    tasksToUpdate.forEach(task => {
+                        if (task.childId && !selectedChildIds.includes(task.childId)) {
+                            batch.delete(doc(db, tasksRef.path, task.id));
+                        }
+                         // Si hay placeholders previos, borrarlos también para limpiar
+                        if (!task.childId) {
+                             batch.delete(doc(db, tasksRef.path, task.id));
+                        }
+                    });
+
+                    // Crear/Actualizar
+                    if (selectedChildIds.length === 0) {
+                         // Crear placeholder
+                         const newRef = doc(tasksRef);
+                         batch.set(newRef, { name: name, points: points, childId: null });
+                    } else {
+                        selectedChildIds.forEach(childId => {
+                             // Si ya existía para este niño, actualizar (buscar el ID del doc)
+                             const existingTask = tasksToUpdate.find(t => t.childId === childId);
+                             if (existingTask) {
+                                 const taskRef = doc(db, tasksRef.path, existingTask.id);
+                                 batch.update(taskRef, { name: name, points: points });
+                             } else {
+                                 const newTaskRef = doc(tasksRef);
+                                 batch.set(newTaskRef, { name: name, points: points, childId: childId });
+                             }
+                        });
+                    }
+
+                    console.log("Actualizando tarea global:", editingGlobalOriginalName);
+
+                } else {
+                    // === MODO CREAR ===
+                    if (selectedChildIds.length === 0) {
+                        // Crear placeholder
+                        const newTaskRef = doc(tasksRef);
+                        batch.set(newTaskRef, { name, points, childId: null });
+                    } else {
+                        selectedChildIds.forEach(childId => {
+                            const newTaskRef = doc(tasksRef);
+                            batch.set(newTaskRef, { name, points, childId });
+                        });
+                    }
+                    console.log("Creando nueva tarea global");
+                }
+
+                await batch.commit();
+                resetGlobalTaskForm(); 
+                
+            } catch (err) {
+                console.error("Error al guardar/actualizar tarea:", err);
+                alert("Error al guardar.");
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function deleteGlobalTask(originalName) {
+            if (!confirm(`¿Seguro que quieres eliminar la tarea "${originalName}" para TODOS los hijos?`)) return;
+
+            showLoading(true);
+            try {
+                const batch = writeBatch(db);
+                // Buscar todas las tareas con ese nombre
+                const tasksToDelete = localFamilyTasks.filter(t => t.name.trim().toLowerCase() === originalName.trim().toLowerCase());
+                
+                tasksToDelete.forEach(task => {
+                    batch.delete(doc(db, tasksRef.path, task.id));
+                });
+
+                await batch.commit();
+            } catch (err) {
+                console.error("Error al eliminar tarea global:", err);
+                alert("Error al eliminar.");
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // Guardar cambios SOLO de checkboxes (el botón de abajo)
+        async function handleSaveGlobalTasks() {
+            showLoading(true);
+            try {
+                const batch = writeBatch(db);
+                const taskCards = document.querySelectorAll('.global-task-card');
+                
+                for (const card of taskCards) {
+                    const taskName = card.dataset.taskName;
+                    const points = parseInt(card.dataset.points, 10);
+                    
+                    const checkboxes = card.querySelectorAll('.task-child-checkbox');
+                    const selectedChildIds = [];
+                    checkboxes.forEach(cb => { if (cb.checked) selectedChildIds.push(cb.value); });
+                    
+                    // Tareas existentes en memoria para este nombre
+                    const existingTasks = localFamilyTasks.filter(t => t.name.trim().toLowerCase() === taskName.trim().toLowerCase());
+                    const existingChildIds = existingTasks.map(t => t.childId);
+                    
+                    if (selectedChildIds.length === 0) {
+                        // CASO: Ningún niño seleccionado -> Crear/Mantener placeholder (childId: null)
+                        
+                        // 1. Borrar todas las asignaciones reales
+                        existingTasks.forEach(task => {
+                            if (task.childId) { // Si tiene un ID real, bórralo
+                                batch.delete(doc(db, tasksRef.path, task.id));
+                            }
+                        });
+                        
+                        // 2. Asegurar que existe un placeholder
+                        const hasPlaceholder = existingTasks.some(t => !t.childId); // childId es null o vacío
+                        if (!hasPlaceholder) {
+                            const newRef = doc(tasksRef);
+                            batch.set(newRef, { name: taskName, points: points, childId: null });
+                        }
+                        
+                    } else {
+                        // CASO: Hay niños seleccionados -> Crear asignaciones y borrar placeholders
+                        
+                        // 1. Crear nuevas asignaciones
+                        selectedChildIds.forEach(childId => {
+                            if (!existingChildIds.includes(childId)) {
+                                const newRef = doc(tasksRef);
+                                batch.set(newRef, { name: taskName, points: points, childId: childId });
+                            }
+                        });
+                        
+                        // 2. Borrar asignaciones desmarcadas O placeholders
+                        existingTasks.forEach(task => {
+                            // Si es un placeholder (no tiene childId) O si tiene childId pero no está seleccionado
+                            if (!task.childId || !selectedChildIds.includes(task.childId)) {
+                                batch.delete(doc(db, tasksRef.path, task.id));
+                            }
+                        });
+                    }
+                }
+                
+                await batch.commit();
+                alert('Asignaciones actualizadas.');
+                
+            } catch (err) {
+                console.error("Error al guardar cambios globales:", err);
+            } finally {
+                showLoading(false);
+            }
         }
 
         function setupAdminPageContext(childId, pageKey) {
@@ -824,40 +1129,6 @@
                 taskEl.querySelector('.btn-approve-task').addEventListener('click', (e) => handleApproveTask(task.id, task.name, parseInt(e.currentTarget.dataset.points, 10)));
                 taskEl.querySelector('.btn-reject-task').addEventListener('click', (e) => handleRejectTask(e.currentTarget.dataset.id));
                 containers.pendingTasksList.appendChild(taskEl);
-            });
-        }
-
-        function renderActiveTasksEditList() {
-            if (!containers.activeTasksEditList) return;
-            containers.activeTasksEditList.innerHTML = '';
-            if (!currentChildId) {
-                containers.activeTasksEditList.innerHTML = '<p class="text-gray-500 text-center">Selecciona un hijo para ver sus tareas.</p>';
-                return;
-            }
-            if (localTasks.length === 0) {
-                containers.activeTasksEditList.innerHTML = '<p class="text-gray-500 text-center">Este hijo no tiene tareas.</p>';
-                return;
-            }
-            const sortedTasks = [...localTasks].sort((a, b) => a.name.localeCompare(b.name));
-
-            sortedTasks.forEach(task => {
-                const taskEl = document.createElement('div');
-                taskEl.className = 'bg-white p-3 rounded-lg shadow flex justify-between items-center border border-gray-200';
-                taskEl.innerHTML = `
-                    <div class="overflow-hidden">
-                        <span class="font-semibold text-gray-800 block truncate">${task.name}</span>
-                        <span class="text-xs text-gray-500">${task.points} pts</span>
-                    </div>
-                    <div class="flex gap-1 shrink-0">
-                        <button class="btn-edit-task text-xl p-2 rounded-full hover:bg-blue-100" data-id="${task.id}">✏️</button>
-                        <button class="btn-delete-task text-xl p-2 rounded-full hover:bg-red-100" data-id="${task.id}">🗑️</button>
-                    </div>
-                `;
-                taskEl.querySelector('.btn-edit-task').addEventListener('click', () => startEditTask(task.id, task.name, task.points));
-                taskEl.querySelector('.btn-delete-task').addEventListener('click', (e) => {
-                    handleDeleteTask(e.currentTarget.dataset.id);
-                });
-                containers.activeTasksEditList.appendChild(taskEl);
             });
         }
 
@@ -1149,11 +1420,6 @@
 
             if (!name || points <= 0) {
                 alert("Por favor ingresa nombre y puntos válidos.");
-                return;
-            }
-
-            if (selectedChildIds.length === 0) {
-                alert("Por favor selecciona al menos un hijo.");
                 return;
             }
             
@@ -1489,6 +1755,13 @@
             
             // TODO: Listener para canjeados
             // redeemedRewardsListener = onSnapshot(redeemedRewardsRef, ...);
+            
+            // Listener global de tareas (para el resumen)
+            const allTasksQuery = query(tasksRef);
+            allTasksListener = onSnapshot(allTasksQuery, (s) => {
+                localFamilyTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
+                if(localUserMode === 'admin') renderAllTasksSummary();
+            });
         }
 
         function setupChildFirestoreListeners() {
@@ -1511,7 +1784,7 @@
                 console.log('tasksListener: Tareas recibidas:', s.docs.length); 
                 localTasks = s.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderTasksList();
-                if(localUserMode === 'admin') renderActiveTasksEditList();
+                // renderActiveTasksEditList() ELIMINADO
             }, (error) => console.error("Error GRAVE en tasksListener:", error)); 
 
             // Listener para Pendientes del hijo (filtradas)
@@ -1840,7 +2113,7 @@
             </header>
 
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Crear Nueva Tarea</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4" id="add-task-title">Crear Nueva Tarea</h2>
                 <form id="form-add-task" class="space-y-4">
                     <input type="text" id="task-name" name="task-name" placeholder="Nombre de la tarea" class="w-full p-3 border rounded-lg" required>
                     <input type="number" id="task-points" name="task-points" placeholder="Puntos" class="w-full p-3 border rounded-lg" required>
@@ -1848,36 +2121,29 @@
                     <div class="space-y-2">
                         <label class="block text-sm font-bold text-gray-700">Asignar a:</label>
                         <div id="task-assignment-checkboxes" class="grid grid-cols-2 gap-2">
-                            <!-- Checkboxes will be populated here -->
+                            <!-- Checkboxes populated by JS -->
                         </div>
                     </div>
-
-                    <button type="submit" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Crear y Asignar</button>
+                    
+                    <div class="flex gap-2">
+                        <button type="submit" id="add-task-submit-btn" class="w-full bg-blue-500 text-white p-3 rounded-lg font-bold">Crear y Asignar</button>
+                        <div id="edit-task-cancel-container" class="hidden w-full">
+                            <button type="button" id="btn-cancel-edit-global-task" class="w-full bg-gray-200 text-gray-700 p-3 rounded-lg font-bold">Cancelar</button>
+                        </div>
+                    </div>
                 </form>
             </div>
-
-            <div class="my-6 border-t-2 border-gray-200"></div>
-
-            <div class="mb-6">
-                <h2 class="text-xl font-bold text-gray-800 mb-2">Ver/Editar Tareas por Hijo</h2>
-                <label for="child-select-tasks" class="block text-sm font-medium text-gray-700 mb-2">Selecciona un hijo:</label>
-                <select id="child-select-tasks" class="w-full p-3 border rounded-lg"></select>
-            </div>
-
             
-            <form id="form-edit-task" class="hidden space-y-3 bg-blue-50 p-3 rounded-lg mt-3 border border-blue-200">
-                <p class="font-bold text-blue-800">Editando Tarea:</p>
-                <input type="text" id="edit-task-name" class="w-full p-3 border rounded-lg" required>
-                <input type="number" id="edit-task-points" class="w-full p-3 border rounded-lg" required>
-                <div class="flex gap-2">
-                    <button type="submit" class="flex-1 bg-green-500 text-white p-3 rounded-lg font-bold">Actualizar</button>
-                    <button type="button" id="btn-edit-task-cancel" class="flex-1 bg-gray-400 text-white p-3 rounded-lg font-bold">Cancelar</button>
+            <!-- NUEVA SECCIÓN DE RESUMEN GLOBAL -->
+            <div class="mb-6 border-t-2 border-gray-200 pt-6">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Resumen de Tareas Asignadas</h2>
+                <div id="global-tasks-summary" class="space-y-2">
+                    <!-- Resumen de tareas -->
                 </div>
-            </form>
-
-            <div class="bg-white p-4 rounded-xl shadow-md mb-20 admin-only">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Lista de Tareas (del hijo sel.)</h2>
-                <div id="active-tasks-edit-list-container" class="space-y-2 max-h-60 overflow-y-auto"></div>
+                 <!-- Botón de Guardar Cambios Globales -->
+                <button id="btn-save-global-tasks" class="hidden w-full mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition-colors flex items-center justify-center gap-2">
+                    <span>💾</span> Guardar Cambios
+                </button>
             </div>
         </div>
 
