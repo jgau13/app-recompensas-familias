@@ -730,6 +730,7 @@
                 let assignedCount = 0;
 
                 localChildren.forEach(child => {
+                    // childId puede ser null si es un placeholder. Si child.id está en la lista, es asignado.
                     const isAssigned = group.assignedChildIds.includes(child.id);
                     const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
                     if (isAssigned) assignedCount++;
@@ -750,7 +751,7 @@
                 // Texto de asignación
                 let statusText = "";
                 if (assignedCount === 0) {
-                     statusText = '<span class="text-xs text-orange-500 font-medium ml-2">Sin asignar</span>';
+                     statusText = '<span class="text-xs text-orange-500 font-medium ml-2">Sin asignar (Plantilla)</span>';
                 }
 
                 card.innerHTML = `
@@ -944,7 +945,6 @@
                     const selectedChildIds = [];
                     checkboxes.forEach(cb => { if (cb.checked) selectedChildIds.push(cb.value); });
                     
-                    // Tareas existentes en memoria para este nombre
                     const existingTasks = localFamilyTasks.filter(t => t.name.trim().toLowerCase() === taskName.trim().toLowerCase());
                     const existingChildIds = existingTasks.map(t => t.childId);
                     
@@ -1011,6 +1011,11 @@
 
             setupChildFirestoreReferences(childId);
             setupChildFirestoreListeners(); 
+            
+            // FIX: Actualizar lista de penalidades porque depende de currentChildId
+            if (pageKey === 'penalties') {
+                renderPenaltiesApplyList();
+            }
         }
 
 
@@ -2153,7 +2158,7 @@
                 <button class="btn-back text-purple-600 font-bold text-xl">⬅</button>
                 <h1 class="text-3xl font-bold text-purple-600 ml-4">Tienda</h1>
             </header>
-            <div id="rewards-list-container" class="space-y-3 mb-8"></div>
+            <div id="rewards-list-container" class="space-y-3 mb-8 child-only"></div>
             
             <!-- SECCIÓN ADMIN PARA AÑADIR/EDITAR RECOMPENSAS -->
             <div class="bg-white p-4 rounded-xl shadow-md mb-6 admin-only">
