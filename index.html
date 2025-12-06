@@ -84,6 +84,7 @@
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
+        let localRedeemedRewards = []; // <-- NUEVO: Lista local de canjes
         let localTotalPoints = 0; 
         let localLastReset = null; 
         let localFamilyTasks = []; 
@@ -115,7 +116,7 @@
         let rewardsListener = null;
         let penaltiesListener = null;
         let pointsHistoryListener = null;
-        let redeemedRewardsListener = null;
+        let redeemedRewardsListener = null; // <-- Ahora sí se usará
         let familyDocListener = null;
         let allTasksListener = null; 
 
@@ -576,6 +577,7 @@
             localRewards = [];
             localPenalties = [];
             localPointsHistory = [];
+            localRedeemedRewards = [];
             localTotalPoints = 0;
             localLastReset = null;
             hasInitialDataLoaded = false;
@@ -601,20 +603,24 @@
             localTasks = [];
             localPendingTasks = [];
             localPointsHistory = [];
+            localRedeemedRewards = [];
             localTasksCooldown = []; 
             
             if(tasksListener) tasksListener();
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
+            if(redeemedRewardsListener) redeemedRewardsListener();
             if(tasksCooldownListener) tasksCooldownListener(); 
             tasksListener = null;
             pendingTasksListener = null;
             pointsHistoryListener = null;
+            redeemedRewardsListener = null;
             tasksCooldownListener = null; 
 
             renderTasksList();
             renderPendingTasksList();
             renderPointsHistory();
+            renderRedeemedRewardsList();
         }
         
         function clearAdminSelects() {
@@ -1028,7 +1034,8 @@
             localChildren.forEach(child => {
                 const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
                 const btn = document.createElement('button');
-                btn.className = "w-full bg-green-500 text-white p-6 rounded-2xl shadow-lg flex flex-col items-center gap-2 hover:bg-green-600 transition-colors";
+                // ESTILO ACTUALIZADO
+                btn.className = "main-menu-button w-full bg-green-500 text-white text-2xl rounded-3xl shadow-lg flex flex-col items-center gap-2 hover:bg-green-600 transition-transform p-8 hover:scale-105";
                 btn.innerHTML = `
                     <span class="text-5xl">${genderEmoji}</span>
                     <span class="text-2xl font-bold">${child.name}</span>
@@ -1198,8 +1205,32 @@
         function renderRedeemedRewardsList() {
             if (!containers.redeemedRewardsList) return;
             containers.redeemedRewardsList.innerHTML = '';
-            // TODO: Implementar listener y renderizado
-            containers.redeemedRewardsList.innerHTML = '<p class="text-gray-500 text-center">Historial de canjes...</p>';
+            
+            if (localRedeemedRewards.length === 0) {
+                containers.redeemedRewardsList.innerHTML = '<p class="text-gray-500 text-center">No hay historial de canjes.</p>';
+                return;
+            }
+
+            localRedeemedRewards.forEach(item => {
+                const el = document.createElement('div');
+                el.className = 'bg-white p-4 rounded-lg shadow flex justify-between items-center border border-gray-100';
+                
+                // Formatear fecha si existe
+                let dateStr = '';
+                if (item.redeemedAt) {
+                    const date = item.redeemedAt.toDate ? item.redeemedAt.toDate() : new Date(item.redeemedAt);
+                    dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+
+                el.innerHTML = `
+                    <div>
+                        <p class="font-bold text-gray-800 text-lg">${item.name}</p>
+                        <p class="text-xs text-gray-500">${dateStr} - <span class="font-medium">${item.childName || 'Hijo'}</span></p>
+                    </div>
+                    <span class="text-pink-600 font-bold text-lg">-${item.cost}</span>
+                `;
+                containers.redeemedRewardsList.appendChild(el);
+            });
         }
 
         function renderPenaltiesApplyList() {
@@ -1270,12 +1301,35 @@
             
             localPointsHistory.forEach(item => {
                 const el = document.createElement('div');
-                const isPositive = item.points > 0;
-                el.className = `flex justify-between items-center p-3 rounded-lg ${isPositive ? 'bg-green-50' : 'bg-red-50'}`;
+                
+                // Lógica de Colores
+                let colorClass = 'bg-gray-100';
+                let textClass = 'text-gray-600';
+                let sign = '';
+
+                if (item.points > 0) {
+                    // Ganancia (Verde)
+                    colorClass = 'bg-green-50';
+                    textClass = 'text-green-600';
+                    sign = '+';
+                } else {
+                    // Pérdida
+                    if (item.reason && item.reason.toLowerCase().startsWith('canje')) {
+                        // Canje (Azul)
+                        colorClass = 'bg-blue-50';
+                        textClass = 'text-blue-600';
+                    } else {
+                        // Penalidad / Otro (Rojo)
+                        colorClass = 'bg-red-50';
+                        textClass = 'text-red-600';
+                    }
+                }
+
+                el.className = `flex justify-between items-center p-3 rounded-lg ${colorClass}`;
                 el.innerHTML = `
                     <span class="font-medium text-gray-700">${item.reason}</span>
-                    <span class="font-bold ${isPositive ? 'text-green-600' : 'text-red-600'}">
-                        ${isPositive ? '+' : ''}${item.points} pts
+                    <span class="font-bold ${textClass}">
+                        ${sign}${item.points} pts
                     </span>
                 `;
                 containers.pointsHistoryList.appendChild(el);
@@ -1775,11 +1829,12 @@
             if(pendingTasksListener) pendingTasksListener();
             if(pointsHistoryListener) pointsHistoryListener();
             if(tasksCooldownListener) tasksCooldownListener(); 
+            if(redeemedRewardsListener) redeemedRewardsListener(); // <-- LIMPIEZA
 
             console.log('setupChildFirestoreListeners: Configurando listeners para childId:', currentChildId); 
 
-            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef || !tasksCooldownRef) { 
-                console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS, no se configuran listeners.', { currentChildId, tasksRef, pendingTasksRef, pointsHistoryRef, tasksCooldownRef });
+            if (!currentChildId || !tasksRef || !pendingTasksRef || !pointsHistoryRef || !tasksCooldownRef || !redeemedRewardsRef) { 
+                console.error('setupChildFirestoreListeners: FALTAN REFERENCIAS.', { currentChildId });
                 return;
             }
 
@@ -1824,6 +1879,23 @@
                 console.error("Error en listener de pointsHistoryRef:", error);
             });
             // *** FIN DE SECCIÓN MODIFICADA ***
+            
+            // *** NUEVO: Listener para LISTA DE CANJES del hijo ***
+            const redeemedQuery = query(redeemedRewardsRef, where("childId", "==", currentChildId));
+            redeemedRewardsListener = onSnapshot(redeemedQuery, (s) => {
+                 let redeemedData = s.docs.map(d => d.data());
+                 
+                 // Ordenar por fecha
+                 redeemedData.sort((a, b) => {
+                    const timeA = a.redeemedAt ? a.redeemedAt.toMillis() : 0;
+                    const timeB = b.redeemedAt ? b.redeemedAt.toMillis() : 0;
+                    return timeB - timeA;
+                });
+                
+                localRedeemedRewards = redeemedData;
+                renderRedeemedRewardsList();
+
+            }, (error) => console.error("Error en redeemedRewardsListener:", error));
 
             // *** NUEVO LISTENER: Tareas en Cooldown (completadas hoy) ***
             const todayStr = getLocalDateString();
@@ -1843,9 +1915,9 @@
         @keyframes spin { to { transform: rotate(360deg); } }
         .loader { animation: spin 1s linear infinite; }
         .main-menu-button {
-            @apply w-full text-white font-bold rounded-2xl shadow-lg
+            @apply w-full text-white font-bold rounded-3xl shadow-lg
                    flex flex-col justify-center items-center transition-transform 
-                   duration-200 ease-in-out transform hover:scale-105 gap-2 px-4 py-6;
+                   duration-200 ease-in-out transform hover:scale-105 gap-2 p-8;
         }
         body { font-family: 'Segoe UI', sans-serif; }
     </style>
