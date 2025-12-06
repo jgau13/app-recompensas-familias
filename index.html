@@ -84,7 +84,7 @@
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
-        let localRedeemedRewards = []; // <-- NUEVO: Lista local de canjes
+        let localRedeemedRewards = []; // <-- VARIABLE AÑADIDA AQUÍ (Corrección del error)
         let localTotalPoints = 0; 
         let localLastReset = null; 
         let localFamilyTasks = []; 
@@ -116,7 +116,7 @@
         let rewardsListener = null;
         let penaltiesListener = null;
         let pointsHistoryListener = null;
-        let redeemedRewardsListener = null; // <-- Ahora sí se usará
+        let redeemedRewardsListener = null;
         let familyDocListener = null;
         let allTasksListener = null; 
 
@@ -1034,11 +1034,11 @@
             localChildren.forEach(child => {
                 const genderEmoji = child.gender === 'boy' ? '👦' : '👧';
                 const btn = document.createElement('button');
-                // ESTILO ACTUALIZADO
-                btn.className = "main-menu-button w-full bg-green-500 text-white text-2xl rounded-3xl shadow-lg flex flex-col items-center gap-2 hover:bg-green-600 transition-transform p-8 hover:scale-105";
+                // ESTILO ACTUALIZADO: Clases directas
+                btn.className = "w-full bg-green-500 text-white text-2xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-green-600";
                 btn.innerHTML = `
                     <span class="text-5xl">${genderEmoji}</span>
-                    <span class="text-2xl font-bold">${child.name}</span>
+                    <span>${child.name}</span>
                 `;
                 btn.addEventListener('click', () => setChildMode(child.id, child.name, child.totalPoints, child.gender));
                 containers.childLoginList.appendChild(btn);
@@ -1914,11 +1914,7 @@
     <style>
         @keyframes spin { to { transform: rotate(360deg); } }
         .loader { animation: spin 1s linear infinite; }
-        .main-menu-button {
-            @apply w-full text-white font-bold rounded-3xl shadow-lg
-                   flex flex-col justify-center items-center transition-transform 
-                   duration-200 ease-in-out transform hover:scale-105 gap-2 p-8;
-        }
+        /* .main-menu-button class removed to use inline Tailwind classes */
         body { font-family: 'Segoe UI', sans-serif; }
     </style>
 </head>
@@ -2043,45 +2039,45 @@
             <!-- Menú Principal -->
             <nav class="grid grid-cols-2 gap-4">
                 <!-- Botones de Hijo -->
-                <button id="btn-tasks" class="main-menu-button bg-blue-500 child-only">
+                <button id="btn-tasks" class="w-full bg-blue-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-blue-600 child-only">
                     <img src="https://static.wixstatic.com/media/63d26f_d51dde8ebc2448e4b7b9024695d228dc~mv2.png" alt="Tareas" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/3B82F6/FFFFFF?text=Tareas'">
                     <span class="text-lg text-center">Tareas Diarias</span>
                 </button>
-                <button id="btn-points" class="main-menu-button bg-green-500 child-only">
+                <button id="btn-points" class="w-full bg-green-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-green-600 child-only">
                     <img src="https://static.wixstatic.com/media/63d26f_be54b83d9e814163a2855dad5df2ba90~mv2.png" alt="Puntos" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/22C55E/FFFFFF?text=Puntos'">
                     <span class="text-lg text-center">Puntos</span>
                 </button>
-                <button id="btn-redeem" class="main-menu-button bg-purple-500 child-only">
+                <button id="btn-redeem" class="w-full bg-purple-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-purple-600 child-only">
                     <img src="https://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
                     <span class="text-lg text-center">Canjear Puntos</span>
                 </button>
-                <button id="btn-redeemed-list" class="main-menu-button bg-pink-500 child-only">
+                <button id="btn-redeemed-list" class="w-full bg-pink-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-pink-600 child-only">
                     <img src="https://static.wixstatic.com/media/63d26f_4005beb44e7846c3bf7d343f28aa1552~mv2.png" alt="Historial" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EC4899/FFFFFF?text=Canjes'">
                     <span class="text-lg text-center">Lista de Canjes</span>
                 </button>
 
                 <!-- Botones de Admin -->
-                <button id="btn-manage-children" class="main-menu-button bg-cyan-500 admin-only">
+                <button id="btn-manage-children" class="w-full bg-cyan-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-cyan-600 admin-only">
                     <span class="text-5xl">👫</span>
                     <span class="text-lg text-center">Gestionar Hijos</span>
                 </button>
-                <button id="btn-evaluate" class="main-menu-button bg-yellow-500 text-yellow-900 admin-only">
+                <button id="btn-evaluate" class="w-full bg-yellow-500 text-yellow-900 text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-yellow-600 admin-only">
                     <img src="https://static.wixstatic.com/media/63d26f_1dddc78199a14d2e85b10b90ec28e8e0~mv2.png" alt="Evaluar" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EAB308/FFFFFF?text=Evaluar'">
                     <span class="text-lg text-center">Evaluar Tareas</span>
                 </button>
-                 <button id="btn-penalties" class="main-menu-button bg-red-600 admin-only">
+                 <button id="btn-penalties" class="w-full bg-red-600 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-red-700 admin-only">
                     <img src="https://static.wixstatic.com/media/63d26f_dca1939b25bb471f92cbeb25d4e578bd~mv2.png" alt="Penalidad" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/DC2626/FFFFFF?text=Penalidad'">
                     <span class="text-lg text-center">Penalidad</span>
                 </button>
-                <button id="btn-manage-tasks" class="main-menu-button bg-blue-500 admin-only">
+                <button id="btn-manage-tasks" class="w-full bg-blue-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-blue-600 admin-only">
                      <img src="https://static.wixstatic.com/media/63d26f_d51dde8ebc2448e4b7b9024695d228dc~mv2.png" alt="Tareas" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/3B82F6/FFFFFF?text=Tareas'">
                     <span class="text-lg text-center">Gestionar Tareas</span>
                 </button>
-                <button class="main-menu-button bg-purple-500 admin-only" onclick="document.getElementById('page-redeem').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
+                <button class="w-full bg-purple-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-purple-600 admin-only" onclick="document.getElementById('page-redeem').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
                     <img src="https://static.wixstatic.com/media/63d26f_127c592fd4f142779dea0d23bc6813cb~mv2.png" alt="Canjear" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/A855F7/FFFFFF?text=Canjear'">
                     <span class="text-lg text-center">Gestionar Tienda</span>
                 </button>
-                <button class="main-menu-button bg-pink-500 admin-only" onclick="document.getElementById('page-redeemed-list').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
+                <button class="w-full bg-pink-500 text-white text-xl font-bold rounded-3xl shadow-lg flex flex-col justify-center items-center transition-transform duration-200 ease-in-out transform hover:scale-105 gap-2 p-8 hover:bg-pink-600 admin-only" onclick="document.getElementById('page-redeemed-list').classList.remove('hidden'); document.getElementById('page-main').classList.add('hidden');">
                     <img src="https://static.wixstatic.com/media/63d26f_4005beb44e7846c3bf7d343f28aa1552~mv2.png" alt="Historial" class="w-16 h-16 object-contain mx-auto" onerror="this.src='https://placehold.co/64x64/EC4899/FFFFFF?text=Canjes'">
                     <span class="text-lg text-center">Ver Canjes Global</span>
                 </button>
