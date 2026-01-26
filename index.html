@@ -1861,6 +1861,7 @@
                 if(localUserMode === 'admin') {
                     populateAdminSelects();
                     renderChildCheckboxes(); // Update checkboxes when children list changes
+                    renderAllTasksSummary(); // Refresh tasks summary when children change
                 }
                 
                 // Si estoy logueado como hijo, actualiza mis puntos
@@ -2074,7 +2075,7 @@
                 <form id="form-pin" class="space-y-4">
                     <input type="password" id="pin-input" pattern="[0-9]*" inputmode="numeric" maxlength="4" class="w-full p-4 text-3xl text-center tracking-widest border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:ring-blue-500" required>
                     <p id="pin-error" class="text-red-500 text-center hidden">PIN incorrecto. Intenta de nuevo.</p>
-                    <button type="submit" id="btn-pin-validate" class="w-full bg-blue-500 text-white p-4 rounded-lg font-bold text-lg hover:bg-blue-600 transition-colors">Entrar</button>
+                    <button type="submit" id="btn-pin-validate" class="hidden">Entrar</button> <!-- Oculto para submit con Enter -->
                     <button type="button" id="btn-pin-cancel" class="w-full bg-gray-200 text-gray-700 p-3 rounded-lg font-bold hover:bg-gray-300 transition-colors">Cancelar</button>
                 </form>
             </div>
