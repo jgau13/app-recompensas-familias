@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>App de Recompensas (Multi-Familia)</title>
+    
+    <!-- Favicon e Icono de Acceso Directo -->
+    <link rel="icon" href="https://static.wixstatic.com/media/63d26f_5746c266c4594f5288a72e5c64929737~mv2.jpg">
+    <link rel="apple-touch-icon" href="https://static.wixstatic.com/media/63d26f_5746c266c4594f5288a72e5c64929737~mv2.jpg">
+    
     <!-- Carga de Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Carga de Firebase -->
@@ -84,7 +89,7 @@
         let localRewards = [];
         let localPenalties = [];
         let localPointsHistory = [];
-        let localRedeemedRewards = []; // <-- VARIABLE AÑADIDA AQUÍ (Corrección del error)
+        let localRedeemedRewards = []; 
         let localTotalPoints = 0; 
         let localLastReset = null; 
         let localFamilyTasks = []; 
@@ -282,6 +287,9 @@
 
             // PIN Modal (Entrada)
             forms['form-pin'].addEventListener('submit', handlePinValidate);
+            // *** NUEVO LISTENER: AUTO-VALIDACIÓN ***
+            elements.pinInput.addEventListener('input', handleAutoPinValidate);
+
             buttons['btn-pin-cancel'].addEventListener('click', () => showPage('page-main'));
 
             // PIN Modal (Cambio)
@@ -474,6 +482,22 @@
                 setAdminMode(currentUserId); 
             } else {
                 elements.pinError.classList.remove('hidden');
+            }
+        }
+
+        // *** NUEVA FUNCIÓN: Auto-validar PIN al escribir ***
+        function handleAutoPinValidate(e) {
+            const pin = e.target.value;
+            // Ocultar error mientras escribe
+            elements.pinError.classList.add('hidden');
+
+            if (pin.length === 4) {
+                if (pin === localAdminPin) {
+                    elements.pinInput.value = '';
+                    setAdminMode(currentUserId);
+                } else {
+                    elements.pinError.classList.remove('hidden');
+                }
             }
         }
 
@@ -1455,9 +1479,33 @@
         }
         async function handleDeleteChild(childId, childName) {
             if (!childrenRef) return;
+            // Confirmación antes de borrar
+            if (!confirm(`¿Seguro que quieres eliminar a ${childName}? Se borrarán sus tareas y puntos.`)) return;
+            
             showLoading(true);
             try { 
-                await deleteDoc(doc(db, childrenRef.path, childId)); 
+                const batch = writeBatch(db);
+
+                // 1. Borrar perfil del hijo
+                batch.delete(doc(db, childrenRef.path, childId));
+
+                // 2. Borrar Tareas Asignadas
+                const tasksQ = query(tasksRef, where("childId", "==", childId));
+                const tasksSnap = await getDocs(tasksQ);
+                tasksSnap.forEach(d => batch.delete(d.ref));
+
+                // 3. Borrar Tareas Pendientes
+                const pendingQ = query(pendingTasksRef, where("childId", "==", childId));
+                const pendingSnap = await getDocs(pendingQ);
+                pendingSnap.forEach(d => batch.delete(d.ref));
+
+                // 4. Borrar Cooldowns
+                const cooldownQ = query(tasksCooldownRef, where("childId", "==", childId));
+                const cooldownSnap = await getDocs(cooldownQ);
+                cooldownSnap.forEach(d => batch.delete(d.ref));
+                
+                await batch.commit();
+
             } 
             catch (err) { console.error(err); } 
             finally { showLoading(false); }
@@ -1482,27 +1530,73 @@
                 return;
             }
             
+            // MODIFICACIÓN: Permitir 0 seleccionados (crear placeholder)
+
             showLoading(true);
-            try { 
-                const batch = writeBatch(db);
-                
-                selectedChildIds.forEach(childId => {
-                    const newTaskRef = doc(tasksRef); // Auto-ID
-                    batch.set(newTaskRef, { 
-                        name, 
-                        points, 
-                        childId: childId 
+            const batch = writeBatch(db);
+
+            try {
+                if (isEditingGlobal) {
+                    // === MODO ACTUALIZAR ===
+                    const tasksToUpdate = localFamilyTasks.filter(t => t.name.trim().toLowerCase() === editingGlobalOriginalName.trim().toLowerCase());
+                    const existingChildIds = tasksToUpdate.map(t => t.childId);
+
+                    // Borrar existentes que ya no están
+                    tasksToUpdate.forEach(task => {
+                        if (task.childId && !selectedChildIds.includes(task.childId)) {
+                            batch.delete(doc(db, tasksRef.path, task.id));
+                        }
+                         // Si hay placeholders previos, borrarlos también para limpiar
+                        if (!task.childId) {
+                             batch.delete(doc(db, tasksRef.path, task.id));
+                        }
                     });
-                });
+
+                    // Crear/Actualizar
+                    if (selectedChildIds.length === 0) {
+                         // Crear placeholder
+                         const newRef = doc(tasksRef);
+                         batch.set(newRef, { name: name, points: points, childId: null });
+                    } else {
+                        selectedChildIds.forEach(childId => {
+                             // Si ya existía para este niño, actualizar (buscar el ID del doc)
+                             const existingTask = tasksToUpdate.find(t => t.childId === childId);
+                             if (existingTask) {
+                                 const taskRef = doc(db, tasksRef.path, existingTask.id);
+                                 batch.update(taskRef, { name: name, points: points });
+                             } else {
+                                 const newTaskRef = doc(tasksRef);
+                                 batch.set(newTaskRef, { name: name, points: points, childId: childId });
+                             }
+                        });
+                    }
+
+                    console.log("Actualizando tarea global:", editingGlobalOriginalName);
+
+                } else {
+                    // === MODO CREAR ===
+                    if (selectedChildIds.length === 0) {
+                        // Crear placeholder
+                        const newTaskRef = doc(tasksRef);
+                        batch.set(newTaskRef, { name, points, childId: null });
+                    } else {
+                        selectedChildIds.forEach(childId => {
+                            const newTaskRef = doc(tasksRef);
+                            batch.set(newTaskRef, { name, points, childId });
+                        });
+                    }
+                    console.log("Creando nueva tarea global");
+                }
 
                 await batch.commit();
-                console.log('handleAddTask: Tareas guardadas con éxito para:', selectedChildIds); 
-                e.target.reset(); 
-                // Resetear checkboxes
-                document.querySelectorAll('input[name="child-assign"]').forEach(cb => cb.checked = false);
-            } 
-            catch (err) { console.error("Error al guardar tarea:", err); } 
-            finally { showLoading(false); }
+                resetGlobalTaskForm(); 
+                
+            } catch (err) {
+                console.error("Error al guardar/actualizar tarea:", err);
+                alert("Error al guardar.");
+            } finally {
+                showLoading(false);
+            }
         }
 
         async function handleEditTaskSubmit(e) {
@@ -2014,12 +2108,12 @@
                 </div>
                 <!-- Botón de Salir (Admin) -->
                 <div class="flex gap-2 admin-only">
-                    <button id="btn-change-pin" class="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-blue-200">🔑 PIN</button>
+                    <button id="btn-change-pin" class="bg-blue-100 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-blue-200">CAMBIAR PIN</button>
                     <button id="btn-logout" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm font-bold hover:bg-gray-300">Salir</button>
                 </div>
                 
                 <!-- *** NUEVO BOTÓN: Salir a Admin (Hijo) *** -->
-                <button id="btn-exit-child-mode" class="child-only text-3xl p-2 rounded-full hover:bg-gray-200 hidden">🔒</button>
+                <button id="btn-exit-child-mode" class="child-only bg-gray-200 text-gray-700 px-4 py-2 rounded-lg font-bold hover:bg-gray-300 hidden">Modo Admin</button>
             </header>
 
             <!-- Panel de Selección de Hijo (Admin) -->
